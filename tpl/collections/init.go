@@ -126,6 +126,11 @@ func init() {
 			[][2]string{},
 		)
 
+		ns.AddMethodMapping(ctx.DistanceSort,
+			[]string{"distanceSort"},
+			[][2]string{},
+		)
+
 		ns.AddMethodMapping(ctx.Union,
 			[]string{"union"},
 			[][2]string{
