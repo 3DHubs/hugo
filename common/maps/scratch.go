@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/gohugoio/hugo/common/collections"
 	"github.com/gohugoio/hugo/common/math"
 )
 
@@ -25,6 +26,24 @@ import (
 type Scratch struct {
 	values map[string]interface{}
 	mu     sync.RWMutex
+}
+
+// Scratcher provides a scratching service.
+type Scratcher interface {
+	Scratch() *Scratch
+}
+
+type scratcher struct {
+	s *Scratch
+}
+
+func (s scratcher) Scratch() *Scratch {
+	return s.s
+}
+
+// NewScratcher creates a new Scratcher.
+func NewScratcher() Scratcher {
+	return scratcher{s: NewScratch()}
 }
 
 // Add will, for single values, add (using the + operator) the addend to the existing addend (if found).
@@ -40,14 +59,12 @@ func (c *Scratch) Add(key string, newAddend interface{}) (string, error) {
 	if found {
 		var err error
 
-		addendV := reflect.ValueOf(existingAddend)
+		addendV := reflect.TypeOf(existingAddend)
 
 		if addendV.Kind() == reflect.Slice || addendV.Kind() == reflect.Array {
-			nav := reflect.ValueOf(newAddend)
-			if nav.Kind() == reflect.Slice || nav.Kind() == reflect.Array {
-				newVal = reflect.AppendSlice(addendV, nav).Interface()
-			} else {
-				newVal = reflect.Append(addendV, nav).Interface()
+			newVal, err = collections.Append(existingAddend, newAddend)
+			if err != nil {
+				return "", err
 			}
 		} else {
 			newVal, err = math.DoArithmetic(existingAddend, newAddend, '+')

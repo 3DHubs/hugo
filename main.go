@@ -14,16 +14,12 @@
 package main
 
 import (
-	"runtime"
-
 	"os"
 
 	"github.com/gohugoio/hugo/commands"
 )
 
 func main() {
-
-	runtime.GOMAXPROCS(runtime.NumCPU())
 	resp := commands.Execute(os.Args[1:])
 
 	if resp.Err != nil {

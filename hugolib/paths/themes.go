@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import (
 	"github.com/gohugoio/hugo/config"
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
-	"github.com/spf13/viper"
 )
 
 type ThemeConfig struct {
@@ -73,18 +72,11 @@ func (c *themesCollector) add(name, configFilename string) (ThemeConfig, error) 
 	var tc ThemeConfig
 
 	if configFilename != "" {
-		v := viper.New()
-		v.SetFs(c.fs)
-		v.AutomaticEnv()
-		v.SetEnvPrefix("hugo")
-		v.SetConfigFile(configFilename)
-
-		err := v.ReadInConfig()
+		var err error
+		cfg, err = config.FromFile(c.fs, configFilename)
 		if err != nil {
 			return tc, err
 		}
-		cfg = v
-
 	}
 
 	tc = ThemeConfig{Name: name, ConfigFilename: configFilename, Cfg: cfg}
@@ -128,7 +120,7 @@ func (c *themesCollector) getConfigFileIfProvided(theme string) string {
 	)
 
 	// Viper supports more, but this is the sub-set supported by Hugo.
-	for _, configFormats := range []string{"toml", "yaml", "yml", "json"} {
+	for _, configFormats := range config.ValidConfigFileExtensions {
 		configFilename = filepath.Join(configDir, "config."+configFormats)
 		exists, _ = afero.Exists(c.fs, configFilename)
 		if exists {

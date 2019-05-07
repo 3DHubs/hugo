@@ -1,10 +1,13 @@
 package hugolib
 
 import (
+	"io"
 	"io/ioutil"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
+	"unicode/utf8"
 
 	"bytes"
 	"fmt"
@@ -12,13 +15,14 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/gohugoio/hugo/langs"
-	"github.com/sanity-io/litter"
-	jww "github.com/spf13/jwalterweatherman"
-
+	"github.com/fsnotify/fsnotify"
+	"github.com/gohugoio/hugo/common/herrors"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/resources/page"
+	"github.com/sanity-io/litter"
 	"github.com/spf13/afero"
+	"github.com/spf13/cast"
 
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/tpl"
@@ -26,21 +30,27 @@ import (
 
 	"os"
 
+	"github.com/gohugoio/hugo/resources/resource"
+
+	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/hugofs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const ()
 
 type sitesBuilder struct {
 	Cfg config.Provider
 	Fs  *hugofs.Fs
 	T   testing.TB
 
-	logger *jww.Notepad
+	*require.Assertions
+
+	logger *loggers.Logger
 
 	dumper litter.Options
+
+	// Used to test partial rebuilds.
+	changedFiles []string
 
 	// Aka the Hugo server mode.
 	running bool
@@ -81,7 +91,7 @@ func newTestSitesBuilder(t testing.TB) *sitesBuilder {
 		Separator:         " ",
 	}
 
-	return &sitesBuilder{T: t, Fs: fs, configFormat: "toml", dumper: litterOptions}
+	return &sitesBuilder{T: t, Assertions: require.New(t), Fs: fs, configFormat: "toml", dumper: litterOptions}
 }
 
 func createTempDir(prefix string) (string, func(), error) {
@@ -103,7 +113,7 @@ func (s *sitesBuilder) Running() *sitesBuilder {
 	return s
 }
 
-func (s *sitesBuilder) WithLogger(logger *jww.Notepad) *sitesBuilder {
+func (s *sitesBuilder) WithLogger(logger *loggers.Logger) *sitesBuilder {
 	s.logger = logger
 	return s
 }
@@ -181,10 +191,13 @@ privacyEnhanced = true
 `
 
 func (s *sitesBuilder) WithSimpleConfigFile() *sitesBuilder {
-	var config = `
-baseURL = "http://example.com/"
+	return s.WithSimpleConfigFileAndBaseURL("http://example.com/")
+}
 
-` + commonConfigSections
+func (s *sitesBuilder) WithSimpleConfigFileAndBaseURL(baseURL string) *sitesBuilder {
+	config := fmt.Sprintf("baseURL = %q", baseURL)
+
+	config = config + commonConfigSections
 	return s.WithConfigFile("toml", config)
 }
 
@@ -250,6 +263,21 @@ lag = "lag"
 
 }
 
+func (s *sitesBuilder) WithSunset(in string) {
+	// Write a real image into one of the bundle above.
+	src, err := os.Open(filepath.FromSlash("testdata/sunset.jpg"))
+	s.NoError(err)
+
+	out, err := s.Fs.Source.Create(filepath.FromSlash(in))
+	s.NoError(err)
+
+	_, err = io.Copy(out, src)
+	s.NoError(err)
+
+	out.Close()
+	src.Close()
+}
+
 func (s *sitesBuilder) WithContent(filenameContent ...string) *sitesBuilder {
 	s.contentFilePairs = append(s.contentFilePairs, filenameContent...)
 	return s
@@ -290,6 +318,19 @@ func (s *sitesBuilder) WithI18nAdded(filenameContent ...string) *sitesBuilder {
 	return s
 }
 
+func (s *sitesBuilder) EditFiles(filenameContent ...string) *sitesBuilder {
+	var changedFiles []string
+	for i := 0; i < len(filenameContent); i += 2 {
+		filename, content := filepath.FromSlash(filenameContent[i]), filenameContent[i+1]
+		changedFiles = append(changedFiles, filename)
+		writeSource(s.T, s.Fs, filename, content)
+
+	}
+	s.changedFiles = changedFiles
+
+	return s
+}
+
 func (s *sitesBuilder) writeFilePairs(folder string, filenameContent []string) *sitesBuilder {
 	if len(filenameContent)%2 != 0 {
 		s.Fatalf("expect filenameContent for %q in pairs (%d)", folder, len(filenameContent))
@@ -312,6 +353,23 @@ func (s *sitesBuilder) writeFilePairs(folder string, filenameContent []string) *
 }
 
 func (s *sitesBuilder) CreateSites() *sitesBuilder {
+	if err := s.CreateSitesE(); err != nil {
+		s.Fatalf("Failed to create sites: %s", err)
+	}
+
+	return s
+}
+
+func (s *sitesBuilder) LoadConfig() error {
+	cfg, _, err := LoadConfig(ConfigSourceDescriptor{Fs: s.Fs.Source, Filename: "config." + s.configFormat})
+	if err != nil {
+		return err
+	}
+	s.Cfg = cfg
+	return nil
+}
+
+func (s *sitesBuilder) CreateSitesE() error {
 	s.addDefaults()
 	s.writeFilePairs("content", s.contentFilePairs)
 	s.writeFilePairs("content", s.contentFilePairsAdded)
@@ -323,27 +381,26 @@ func (s *sitesBuilder) CreateSites() *sitesBuilder {
 	s.writeFilePairs("i18n", s.i18nFilePairsAdded)
 
 	if s.Cfg == nil {
-		cfg, _, err := LoadConfig(ConfigSourceDescriptor{Fs: s.Fs.Source, Filename: "config." + s.configFormat})
-		if err != nil {
-			s.Fatalf("Failed to load config: %s", err)
+		if err := s.LoadConfig(); err != nil {
+			return err
 		}
-		// TODO(bep)
-		/*		expectedConfigs := 1
-				if s.theme != "" {
-					expectedConfigs = 2
-				}
-				require.Equal(s.T, expectedConfigs, len(configFiles), fmt.Sprintf("Configs: %v", configFiles))
-		*/
-		s.Cfg = cfg
 	}
 
 	sites, err := NewHugoSites(deps.DepsCfg{Fs: s.Fs, Cfg: s.Cfg, Logger: s.logger, Running: s.running})
 	if err != nil {
-		s.Fatalf("Failed to create sites: %s", err)
+		return err
 	}
 	s.H = sites
 
-	return s
+	return nil
+}
+
+func (s *sitesBuilder) BuildE(cfg BuildCfg) error {
+	if s.H == nil {
+		s.CreateSites()
+	}
+
+	return s.H.Build(cfg)
 }
 
 func (s *sitesBuilder) Build(cfg BuildCfg) *sitesBuilder {
@@ -354,12 +411,34 @@ func (s *sitesBuilder) BuildFail(cfg BuildCfg) *sitesBuilder {
 	return s.build(cfg, true)
 }
 
+func (s *sitesBuilder) changeEvents() []fsnotify.Event {
+	if len(s.changedFiles) == 0 {
+		return nil
+	}
+
+	events := make([]fsnotify.Event, len(s.changedFiles))
+	// TODO(bep) remove?
+	for i, v := range s.changedFiles {
+		events[i] = fsnotify.Event{
+			Name: v,
+			Op:   fsnotify.Write,
+		}
+	}
+
+	return events
+}
+
 func (s *sitesBuilder) build(cfg BuildCfg, shouldFail bool) *sitesBuilder {
+	defer func() {
+		s.changedFiles = nil
+	}()
+
 	if s.H == nil {
 		s.CreateSites()
 	}
 
-	err := s.H.Build(cfg)
+	err := s.H.Build(cfg, s.changeEvents()...)
+
 	if err == nil {
 		logErrorCount := s.H.NumLogErrors()
 		if logErrorCount > 0 {
@@ -367,6 +446,7 @@ func (s *sitesBuilder) build(cfg BuildCfg, shouldFail bool) *sitesBuilder {
 		}
 	}
 	if err != nil && !shouldFail {
+		herrors.PrintStackTrace(err)
 		s.Fatalf("Build failed: %s", err)
 	} else if err == nil && shouldFail {
 		s.Fatalf("Expected error")
@@ -387,9 +467,7 @@ date: "2018-02-28"
 ---
 # doc1
 *some "content"*
-
 {{< shortcode >}}
-
 {{< lingo >}}
 `
 
@@ -400,17 +478,23 @@ date: "2018-02-28"
 			"content/sect/doc1.nn.md", contentTemplate,
 		}
 
+		listTemplateCommon = "{{ $p := .Paginator }}{{ $p.PageNumber }}|{{ .Title }}|{{ i18n \"hello\" }}|{{ .Permalink }}|Pager: {{ template \"_internal/pagination.html\" . }}|Kind: {{ .Kind }}|Content: {{ .Content }}"
+
 		defaultTemplates = []string{
-			"_default/single.html", "Single: {{ .Title }}|{{ i18n \"hello\" }}|{{.Lang}}|{{ .Content }}",
-			"_default/list.html", "{{ $p := .Paginator }}List Page {{ $p.PageNumber }}: {{ .Title }}|{{ i18n \"hello\" }}|{{ .Permalink }}|Pager: {{ template \"_internal/pagination.html\" . }}",
+			"_default/single.html", "Single: {{ .Title }}|{{ i18n \"hello\" }}|{{.Language.Lang}}|RelPermalink: {{ .RelPermalink }}|Permalink: {{ .Permalink }}|{{ .Content }}|Resources: {{ range .Resources }}{{ .MediaType }}: {{ .RelPermalink}} -- {{ end }}|Summary: {{ .Summary }}|Truncated: {{ .Truncated }}",
+			"_default/list.html", "List Page " + listTemplateCommon,
 			"index.html", "{{ $p := .Paginator }}Default Home Page {{ $p.PageNumber }}: {{ .Title }}|{{ .IsHome }}|{{ i18n \"hello\" }}|{{ .Permalink }}|{{  .Site.Data.hugo.slogan }}|String Resource: {{ ( \"Hugo Pipes\" | resources.FromString \"text/pipes.txt\").RelPermalink  }}",
 			"index.fr.html", "{{ $p := .Paginator }}French Home Page {{ $p.PageNumber }}: {{ .Title }}|{{ .IsHome }}|{{ i18n \"hello\" }}|{{ .Permalink }}|{{  .Site.Data.hugo.slogan }}|String Resource: {{ ( \"Hugo Pipes\" | resources.FromString \"text/pipes.txt\").RelPermalink  }}",
-
+			"_default/terms.html", "Taxonomy Term Page " + listTemplateCommon,
+			"_default/taxonomy.html", "Taxonomy List Page " + listTemplateCommon,
 			// Shortcodes
 			"shortcodes/shortcode.html", "Shortcode: {{ i18n \"hello\" }}",
 			// A shortcode in multiple languages
 			"shortcodes/lingo.html", "LingoDefault",
 			"shortcodes/lingo.fr.html", "LingoFrench",
+			// Special templates
+			"404.html", "404|{{ .Lang }}|{{ .Title }}",
+			"robots.txt", "robots|{{ .Lang }}|{{ .Title }}",
 		}
 
 		defaultI18n = []string{
@@ -448,19 +532,34 @@ func (s *sitesBuilder) Fatalf(format string, args ...interface{}) {
 }
 
 func Fatalf(t testing.TB, format string, args ...interface{}) {
-	trace := strings.Join(assert.CallerInfo(), "\n\r\t\t\t")
+	trace := stackTrace()
 	format = format + "\n%s"
 	args = append(args, trace)
 	t.Fatalf(format, args...)
 }
 
+func stackTrace() string {
+	return strings.Join(assert.CallerInfo(), "\n\r\t\t\t")
+}
+
+func (s *sitesBuilder) AssertFileContentFn(filename string, f func(s string) bool) {
+	content := s.FileContent(filename)
+	if !f(content) {
+		s.Fatalf("Assert failed for %q", filename)
+	}
+}
+
 func (s *sitesBuilder) AssertFileContent(filename string, matches ...string) {
-	content := readDestination(s.T, s.Fs, filename)
+	content := s.FileContent(filename)
 	for _, match := range matches {
 		if !strings.Contains(content, match) {
 			s.Fatalf("No match for %q in content for %s\n%s\n%q", match, filename, content, content)
 		}
 	}
+}
+
+func (s *sitesBuilder) FileContent(filename string) string {
+	return readDestination(s.T, s.Fs, filename)
 }
 
 func (s *sitesBuilder) AssertObject(expected string, object interface{}) {
@@ -477,7 +576,7 @@ func (s *sitesBuilder) AssertObject(expected string, object interface{}) {
 func (s *sitesBuilder) AssertFileContentRe(filename string, matches ...string) {
 	content := readDestination(s.T, s.Fs, filename)
 	for _, match := range matches {
-		r := regexp.MustCompile(match)
+		r := regexp.MustCompile("(?s)" + match)
 		if !r.MatchString(content) {
 			s.Fatalf("No match for %q in content for %s\n%q", match, filename, content)
 		}
@@ -530,32 +629,6 @@ func (th testHelper) replaceDefaultContentLanguageValue(value string) string {
 	return value
 }
 
-func newTestPathSpec(fs *hugofs.Fs, v *viper.Viper) *helpers.PathSpec {
-	l := langs.NewDefaultLanguage(v)
-	ps, _ := helpers.NewPathSpec(fs, l)
-	return ps
-}
-
-func newTestDefaultPathSpec(t *testing.T) *helpers.PathSpec {
-	v := viper.New()
-	// Easier to reason about in tests.
-	v.Set("disablePathToLower", true)
-	v.Set("contentDir", "content")
-	v.Set("dataDir", "data")
-	v.Set("i18nDir", "i18n")
-	v.Set("layoutDir", "layouts")
-	v.Set("archetypeDir", "archetypes")
-	v.Set("assetDir", "assets")
-	v.Set("resourceDir", "resources")
-	v.Set("publishDir", "public")
-	fs := hugofs.NewDefault(v)
-	ps, err := helpers.NewPathSpec(fs, v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ps
-}
-
 func newTestCfg() (*viper.Viper, *hugofs.Fs) {
 
 	v := viper.New()
@@ -570,27 +643,6 @@ func newTestCfg() (*viper.Viper, *hugofs.Fs) {
 
 	return v, fs
 
-}
-
-// newTestSite creates a new site in the  English language with in-memory Fs.
-// The site will have a template system loaded and ready to use.
-// Note: This is only used in single site tests.
-func newTestSite(t testing.TB, configKeyValues ...interface{}) *Site {
-
-	cfg, fs := newTestCfg()
-
-	for i := 0; i < len(configKeyValues); i += 2 {
-		cfg.Set(configKeyValues[i].(string), configKeyValues[i+1])
-	}
-
-	d := deps.DepsCfg{Fs: fs, Cfg: cfg}
-
-	s, err := NewSiteForCfg(d)
-
-	if err != nil {
-		Fatalf(t, "Failed to create Site: %s", err)
-	}
-	return s
 }
 
 func newTestSitesFromConfig(t testing.TB, afs afero.Fs, tomlConfig string, layoutPathContentPairs ...string) (testHelper, *HugoSites) {
@@ -639,13 +691,19 @@ func createWithTemplateFromNameValues(additionalTemplates ...string) func(templ 
 }
 
 func buildSingleSite(t testing.TB, depsCfg deps.DepsCfg, buildCfg BuildCfg) *Site {
-	return buildSingleSiteExpected(t, false, depsCfg, buildCfg)
+	return buildSingleSiteExpected(t, false, false, depsCfg, buildCfg)
 }
 
-func buildSingleSiteExpected(t testing.TB, expectBuildError bool, depsCfg deps.DepsCfg, buildCfg BuildCfg) *Site {
+func buildSingleSiteExpected(t testing.TB, expectSiteInitEror, expectBuildError bool, depsCfg deps.DepsCfg, buildCfg BuildCfg) *Site {
 	h, err := NewHugoSites(depsCfg)
 
-	require.NoError(t, err)
+	if expectSiteInitEror {
+		require.Error(t, err)
+		return nil
+	} else {
+		require.NoError(t, err)
+	}
+
 	require.Len(t, h.Sites, 1)
 
 	if expectBuildError {
@@ -665,11 +723,61 @@ func writeSourcesToSource(t *testing.T, base string, fs *hugofs.Fs, sources ...[
 	}
 }
 
-func dumpPages(pages ...*Page) {
+func getPage(in page.Page, ref string) page.Page {
+	p, err := in.GetPage(ref)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+func content(c resource.ContentProvider) string {
+	cc, err := c.Content()
+	if err != nil {
+		panic(err)
+	}
+
+	ccs, err := cast.ToStringE(cc)
+	if err != nil {
+		panic(err)
+	}
+	return ccs
+}
+
+func dumpPages(pages ...page.Page) {
+	fmt.Println("---------")
 	for i, p := range pages {
-		fmt.Printf("%d: Kind: %s Title: %-10s RelPermalink: %-10s Path: %-10s sections: %s Len Sections(): %d\n",
+		fmt.Printf("%d: Kind: %s Title: %-10s RelPermalink: %-10s Path: %-10s sections: %s\n",
 			i+1,
-			p.Kind, p.title, p.RelPermalink(), p.Path(), p.sections, len(p.Sections()))
+			p.Kind(), p.Title(), p.RelPermalink(), p.Path(), p.SectionsPath())
+	}
+}
+
+func dumpSPages(pages ...*pageState) {
+	for i, p := range pages {
+		fmt.Printf("%d: Kind: %s Title: %-10s RelPermalink: %-10s Path: %-10s sections: %s\n",
+			i+1,
+			p.Kind(), p.Title(), p.RelPermalink(), p.Path(), p.SectionsPath())
+	}
+}
+
+func printStringIndexes(s string) {
+	lines := strings.Split(s, "\n")
+	i := 0
+
+	for _, line := range lines {
+
+		for _, r := range line {
+			fmt.Printf("%-3s", strconv.Itoa(i))
+			i += utf8.RuneLen(r)
+		}
+		i++
+		fmt.Println()
+		for _, r := range line {
+			fmt.Printf("%-3s", string(r))
+		}
+		fmt.Println()
+
 	}
 }
 
@@ -679,4 +787,14 @@ func isCI() bool {
 
 func isGo111() bool {
 	return strings.Contains(runtime.Version(), "1.11")
+}
+
+// See https://github.com/golang/go/issues/19280
+// Not in use.
+var parallelEnabled = true
+
+func parallel(t *testing.T) {
+	if parallelEnabled {
+		t.Parallel()
+	}
 }

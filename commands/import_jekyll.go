@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package commands
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -24,6 +25,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/gohugoio/hugo/parser/metadecoders"
 
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugofs"
@@ -253,7 +257,7 @@ func (i *importCmd) loadJekyllConfig(fs afero.Fs, jekyllRoot string) map[string]
 		return nil
 	}
 
-	c, err := parser.HandleYAMLMetaData(b)
+	c, err := metadecoders.Default.UnmarshalToMap(b, metadecoders.YAML)
 
 	if err != nil {
 		return nil
@@ -262,7 +266,7 @@ func (i *importCmd) loadJekyllConfig(fs afero.Fs, jekyllRoot string) map[string]
 	return c
 }
 
-func (i *importCmd) createConfigFromJekyll(fs afero.Fs, inpath string, kind string, jekyllConfig map[string]interface{}) (err error) {
+func (i *importCmd) createConfigFromJekyll(fs afero.Fs, inpath string, kind metadecoders.Format, jekyllConfig map[string]interface{}) (err error) {
 	title := "My New Hugo Site"
 	baseURL := "http://example.org/"
 
@@ -288,15 +292,14 @@ func (i *importCmd) createConfigFromJekyll(fs afero.Fs, inpath string, kind stri
 		"languageCode":       "en-us",
 		"disablePathToLower": true,
 	}
-	kind = parser.FormatSanitize(kind)
 
 	var buf bytes.Buffer
-	err = parser.InterfaceToConfig(in, parser.FormatToLeadRune(kind), &buf)
+	err = parser.InterfaceToConfig(in, kind, &buf)
 	if err != nil {
 		return err
 	}
 
-	return helpers.WriteToDisk(filepath.Join(inpath, "config."+kind), &buf, fs)
+	return helpers.WriteToDisk(filepath.Join(inpath, "config."+string(kind)), &buf, fs)
 }
 
 func copyFile(source string, dest string) error {
@@ -337,7 +340,7 @@ func copyDir(source string, dest string) error {
 	if err != nil {
 		return err
 	}
-	entries, err := ioutil.ReadDir(source)
+	entries, _ := ioutil.ReadDir(source)
 	for _, entry := range entries {
 		sfp := filepath.Join(source, entry.Name())
 		dfp := filepath.Join(dest, entry.Name())
@@ -370,6 +373,10 @@ func (i *importCmd) copyJekyllFilesAndFolders(jekyllRoot, dest string, jekyllPos
 		return err
 	}
 	entries, err := ioutil.ReadDir(jekyllRoot)
+	if err != nil {
+		return err
+	}
+
 	for _, entry := range entries {
 		sfp := filepath.Join(jekyllRoot, entry.Name())
 		dfp := filepath.Join(dest, entry.Name())
@@ -445,38 +452,24 @@ func convertJekyllPost(s *hugolib.Site, path, relPath, targetDir string, draft b
 		return err
 	}
 
-	psr, err := parser.ReadFrom(bytes.NewReader(contentBytes))
+	pf, err := parseContentFile(bytes.NewReader(contentBytes))
 	if err != nil {
 		jww.ERROR.Println("Parse file error:", path)
 		return err
 	}
 
-	metadata, err := psr.Metadata()
-	if err != nil {
-		jww.ERROR.Println("Processing file error:", path)
-		return err
-	}
-
-	newmetadata, err := convertJekyllMetaData(metadata, postName, postDate, draft)
+	newmetadata, err := convertJekyllMetaData(pf.frontMatter, postName, postDate, draft)
 	if err != nil {
 		jww.ERROR.Println("Convert metadata error:", path)
 		return err
 	}
 
-	jww.TRACE.Println(newmetadata)
-	content := convertJekyllContent(newmetadata, string(psr.Content()))
+	content := convertJekyllContent(newmetadata, string(pf.content))
 
-	page, err := s.NewPage(filename)
-	if err != nil {
-		jww.ERROR.Println("New page error", filename)
-		return err
+	fs := hugofs.Os
+	if err := helpers.WriteToDisk(targetFile, strings.NewReader(content), fs); err != nil {
+		return fmt.Errorf("failed to save file %q: %s", filename, err)
 	}
-
-	page.SetSourceContent([]byte(content))
-	page.SetSourceMetaData(newmetadata, parser.FormatToLeadRune("yaml"))
-	page.SaveSourceAs(targetFile)
-
-	jww.TRACE.Println("Target file:", targetFile)
 
 	return nil
 }
@@ -557,7 +550,6 @@ func convertJekyllContent(m interface{}, content string) string {
 	}{
 		{regexp.MustCompile("(?i)<!-- more -->"), "<!--more-->"},
 		{regexp.MustCompile(`\{%\s*raw\s*%\}\s*(.*?)\s*\{%\s*endraw\s*%\}`), "$1"},
-		{regexp.MustCompile(`{%\s*highlight\s*(.*?)\s*%}`), "{{< highlight $1 >}}"},
 		{regexp.MustCompile(`{%\s*endhighlight\s*%}`), "{{< / highlight >}}"},
 	}
 
@@ -571,6 +563,7 @@ func convertJekyllContent(m interface{}, content string) string {
 	}{
 		// Octopress image tag: http://octopress.org/docs/plugins/image-tag/
 		{regexp.MustCompile(`{%\s+img\s*(.*?)\s*%}`), replaceImageTag},
+		{regexp.MustCompile(`{%\s*highlight\s*(.*?)\s*%}`), replaceHighlightTag},
 	}
 
 	for _, replace := range replaceListFunc {
@@ -578,6 +571,50 @@ func convertJekyllContent(m interface{}, content string) string {
 	}
 
 	return content
+}
+
+func replaceHighlightTag(match string) string {
+	r := regexp.MustCompile(`{%\s*highlight\s*(.*?)\s*%}`)
+	parts := r.FindStringSubmatch(match)
+	lastQuote := rune(0)
+	f := func(c rune) bool {
+		switch {
+		case c == lastQuote:
+			lastQuote = rune(0)
+			return false
+		case lastQuote != rune(0):
+			return false
+		case unicode.In(c, unicode.Quotation_Mark):
+			lastQuote = c
+			return false
+		default:
+			return unicode.IsSpace(c)
+		}
+	}
+	// splitting string by space but considering quoted section
+	items := strings.FieldsFunc(parts[1], f)
+
+	result := bytes.NewBufferString("{{< highlight ")
+	result.WriteString(items[0]) // language
+	options := items[1:]
+	for i, opt := range options {
+		opt = strings.Replace(opt, "\"", "", -1)
+		if opt == "linenos" {
+			opt = "linenos=table"
+		}
+		if i == 0 {
+			opt = " \"" + opt
+		}
+		if i < len(options)-1 {
+			opt += ","
+		} else if i == len(options)-1 {
+			opt += "\""
+		}
+		result.WriteString(opt)
+	}
+
+	result.WriteString(" >}}")
+	return result.String()
 }
 
 func replaceImageTag(match string) string {

@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,21 +17,17 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io/ioutil"
-	"log"
 	"math/rand"
-	"os"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/gohugoio/hugo/common/collections"
+	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugofs"
 	"github.com/gohugoio/hugo/langs"
-	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,16 +100,16 @@ func TestGroup(t *testing.T) {
 		items  interface{}
 		expect interface{}
 	}{
-		{"a", []*tstGrouper{&tstGrouper{}, &tstGrouper{}}, "a(2)"},
+		{"a", []*tstGrouper{{}, {}}, "a(2)"},
 		{"b", tstGroupers{&tstGrouper{}, &tstGrouper{}}, "b(2)"},
-		{"a", []tstGrouper{tstGrouper{}, tstGrouper{}}, "a(2)"},
-		{"a", []*tstGrouper2{&tstGrouper2{}, &tstGrouper2{}}, "a(2)"},
-		{"b", []tstGrouper2{tstGrouper2{}, tstGrouper2{}}, "b(2)"},
+		{"a", []tstGrouper{{}, {}}, "a(2)"},
+		{"a", []*tstGrouper2{{}, {}}, "a(2)"},
+		{"b", []tstGrouper2{{}, {}}, "b(2)"},
 		{"a", []*tstGrouper{}, "a(0)"},
 		{"a", []string{"a", "b"}, false},
 		{"a", "asdf", false},
 		{"a", nil, false},
-		{nil, []*tstGrouper{&tstGrouper{}, &tstGrouper{}}, false},
+		{nil, []*tstGrouper{{}, {}}, false},
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
@@ -280,6 +276,7 @@ func TestFirst(t *testing.T) {
 
 func TestIn(t *testing.T) {
 	t.Parallel()
+	assert := require.New(t)
 
 	ns := New(&deps.Deps{})
 
@@ -306,42 +303,53 @@ func TestIn(t *testing.T) {
 		{"this substring should be found", "substring", true},
 		{"this substring should not be found", "subseastring", false},
 		{nil, "foo", false},
+		// Pointers
+		{pagesPtr{p1, p2, p3, p2}, p2, true},
+		{pagesPtr{p1, p2, p3, p2}, p4, false},
+		// Structs
+		{pagesVals{p3v, p2v, p3v, p2v}, p2v, true},
+		{pagesVals{p3v, p2v, p3v, p2v}, p4v, false},
 	} {
 
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
-		result := ns.In(test.l1, test.l2)
-		assert.Equal(t, test.expect, result, errMsg)
+		result, err := ns.In(test.l1, test.l2)
+		assert.NoError(err)
+		assert.Equal(test.expect, result, errMsg)
 	}
+
+	// Slices are not comparable
+	_, err := ns.In([]string{"a", "b"}, []string{"a", "b"})
+	assert.Error(err)
 }
 
-type page struct {
+type testPage struct {
 	Title string
 }
 
-func (p page) String() string {
+func (p testPage) String() string {
 	return "p-" + p.Title
 }
 
-type pagesPtr []*page
-type pagesVals []page
+type pagesPtr []*testPage
+type pagesVals []testPage
+
+var (
+	p1 = &testPage{"A"}
+	p2 = &testPage{"B"}
+	p3 = &testPage{"C"}
+	p4 = &testPage{"D"}
+
+	p1v = testPage{"A"}
+	p2v = testPage{"B"}
+	p3v = testPage{"C"}
+	p4v = testPage{"D"}
+)
 
 func TestIntersect(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
-
-	var (
-		p1 = &page{"A"}
-		p2 = &page{"B"}
-		p3 = &page{"C"}
-		p4 = &page{"D"}
-
-		p1v = page{"A"}
-		p2v = page{"B"}
-		p3v = page{"C"}
-		p4v = page{"D"}
-	)
 
 	for i, test := range []struct {
 		l1, l2 interface{}
@@ -644,83 +652,7 @@ func TestShuffleRandomising(t *testing.T) {
 	}
 }
 
-var _ collections.Slicer = (*tstSlicer)(nil)
-var _ collections.Slicer = (*tstSlicerIn1)(nil)
-var _ collections.Slicer = (*tstSlicerIn2)(nil)
-var _ testSlicerInterface = (*tstSlicerIn1)(nil)
-var _ testSlicerInterface = (*tstSlicerIn1)(nil)
-
-type testSlicerInterface interface {
-	Name() string
-}
-
-type testSlicerInterfaces []testSlicerInterface
-
-type tstSlicerIn1 struct {
-	name string
-}
-
-type tstSlicerIn2 struct {
-	name string
-}
-
-type tstSlicer struct {
-	name string
-}
-
-func (p *tstSlicerIn1) Slice(in interface{}) (interface{}, error) {
-	items := in.([]interface{})
-	result := make(testSlicerInterfaces, len(items))
-	for i, v := range items {
-		switch vv := v.(type) {
-		case testSlicerInterface:
-			result[i] = vv
-		default:
-			return nil, errors.New("invalid type")
-		}
-
-	}
-	return result, nil
-}
-
-func (p *tstSlicerIn2) Slice(in interface{}) (interface{}, error) {
-	items := in.([]interface{})
-	result := make(testSlicerInterfaces, len(items))
-	for i, v := range items {
-		switch vv := v.(type) {
-		case testSlicerInterface:
-			result[i] = vv
-		default:
-			return nil, errors.New("invalid type")
-		}
-	}
-	return result, nil
-}
-
-func (p *tstSlicerIn1) Name() string {
-	return p.Name()
-}
-
-func (p *tstSlicerIn2) Name() string {
-	return p.Name()
-}
-
-func (p *tstSlicer) Slice(in interface{}) (interface{}, error) {
-	items := in.([]interface{})
-	result := make(tstSlicers, len(items))
-	for i, v := range items {
-		switch vv := v.(type) {
-		case *tstSlicer:
-			result[i] = vv
-		default:
-			return nil, errors.New("invalid type")
-		}
-	}
-	return result, nil
-}
-
-type tstSlicers []*tstSlicer
-
+// Also see tests in commons/collection.
 func TestSlice(t *testing.T) {
 	t.Parallel()
 
@@ -731,14 +663,10 @@ func TestSlice(t *testing.T) {
 		expected interface{}
 	}{
 		{[]interface{}{"a", "b"}, []string{"a", "b"}},
-		{[]interface{}{&tstSlicer{"a"}, &tstSlicer{"b"}}, tstSlicers{&tstSlicer{"a"}, &tstSlicer{"b"}}},
-		{[]interface{}{&tstSlicer{"a"}, "b"}, []interface{}{&tstSlicer{"a"}, "b"}},
 		{[]interface{}{}, []interface{}{}},
 		{[]interface{}{nil}, []interface{}{nil}},
 		{[]interface{}{5, "b"}, []interface{}{5, "b"}},
-		{[]interface{}{tstNoStringer{}}, []tstNoStringer{tstNoStringer{}}},
-		{[]interface{}{&tstSlicerIn1{"a"}, &tstSlicerIn2{"b"}}, testSlicerInterfaces{&tstSlicerIn1{"a"}, &tstSlicerIn2{"b"}}},
-		{[]interface{}{&tstSlicerIn1{"a"}, &tstSlicer{"b"}}, []interface{}{&tstSlicerIn1{"a"}, &tstSlicer{"b"}}},
+		{[]interface{}{tstNoStringer{}}, []tstNoStringer{{}}},
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test.args)
 
@@ -754,18 +682,6 @@ func TestUnion(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
-
-	var (
-		p1 = &page{"A"}
-		p2 = &page{"B"}
-		//		p3 = &page{"C"}
-		p4 = &page{"D"}
-
-		p1v = page{"A"}
-		//p2v = page{"B"}
-		p3v = page{"C"}
-		//p4v = page{"D"}
-	)
 
 	for i, test := range []struct {
 		l1     interface{}
@@ -870,7 +786,15 @@ func TestUniq(t *testing.T) {
 		{[]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
 		{[4]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
 		{nil, make([]interface{}, 0), false},
-		// should-errors
+		// Pointers
+		{pagesPtr{p1, p2, p3, p2}, pagesPtr{p1, p2, p3}, false},
+		{pagesPtr{}, pagesPtr{}, false},
+		// Structs
+		{pagesVals{p3v, p2v, p3v, p2v}, pagesVals{p3v, p2v}, false},
+
+		// should fail
+		// uncomparable types
+		{[]map[string]int{{"K1": 1}}, []map[string]int{{"K2": 2}, {"K2": 2}}, true},
 		{1, 1, true},
 		{"foo", "fo", true},
 	} {
@@ -937,7 +861,7 @@ func newDeps(cfg config.Provider) *deps.Deps {
 		Cfg:         cfg,
 		Fs:          hugofs.NewMem(l),
 		ContentSpec: cs,
-		Log:         jww.NewNotepad(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, "", log.Ldate|log.Ltime),
+		Log:         loggers.NewErrorLogger(),
 	}
 }
 

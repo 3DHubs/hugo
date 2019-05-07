@@ -1,4 +1,4 @@
-// Copyright 2017-present The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ type Type struct {
 
 	Delimiter string `json:"delimiter"` // e.g. "."
 
+	// TODO(bep) make this a string to make it hashable + method
 	Suffixes []string `json:"suffixes"`
 
 	// Set when doing lookup by suffix.
@@ -135,6 +136,12 @@ var (
 	XMLType        = Type{MainType: "application", SubType: "xml", Suffixes: []string{"xml"}, Delimiter: defaultDelimiter}
 	SVGType        = Type{MainType: "image", SubType: "svg", mimeSuffix: "xml", Suffixes: []string{"svg"}, Delimiter: defaultDelimiter}
 	TextType       = Type{MainType: "text", SubType: "plain", Suffixes: []string{"txt"}, Delimiter: defaultDelimiter}
+	TOMLType       = Type{MainType: "application", SubType: "toml", Suffixes: []string{"toml"}, Delimiter: defaultDelimiter}
+	YAMLType       = Type{MainType: "application", SubType: "yaml", Suffixes: []string{"yaml", "yml"}, Delimiter: defaultDelimiter}
+
+	// Common image types
+	PNGType = Type{MainType: "image", SubType: "png", Suffixes: []string{"png"}, Delimiter: defaultDelimiter}
+	JPGType = Type{MainType: "image", SubType: "jpg", Suffixes: []string{"jpg", "jpeg"}, Delimiter: defaultDelimiter}
 
 	OctetType = Type{MainType: "application", SubType: "octet-stream"}
 )
@@ -154,6 +161,10 @@ var DefaultTypes = Types{
 	SVGType,
 	TextType,
 	OctetType,
+	YAMLType,
+	TOMLType,
+	PNGType,
+	JPGType,
 }
 
 func init() {

@@ -1,4 +1,4 @@
-// Copyright 2017 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -83,19 +83,19 @@ Menu Main:  {{ partial "menu.html" (dict "page" . "menu" "main") }}`,
 
 	s := h.Sites[0]
 
-	require.Len(t, s.Menus, 2)
+	require.Len(t, s.Menus(), 2)
 
-	p1 := s.RegularPages[0].Menus()
+	p1 := s.RegularPages()[0].Menus()
 
 	// There is only one menu in the page, but it is "member of" 2
 	require.Len(t, p1, 1)
 
 	th.assertFileContent("public/sect1/p1/index.html", "Single",
 		"Menu Sect:  "+
-			"/sect5/|Section Five||10|-|-|"+
-			"/sect1/|Section One||100|-|HasMenuCurrent|"+
-			"/sect2/|Sect2s||0|-|-|"+
-			"/sect3/|Sect3s||0|-|-|",
+			"/sect5/|Section Five|Section Five|10|-|-|"+
+			"/sect1/|Section One|Section One|100|-|HasMenuCurrent|"+
+			"/sect2/|Sect2s|Sect2s|0|-|-|"+
+			"/sect3/|Sect3s|Sect3s|0|-|-|",
 		"Menu Main:  "+
 			"/sect3/p5/|p5|atitle5|5|-|-|"+
 			"/sect2/p4/|p4|atitle4|10|-|-|"+
@@ -106,9 +106,119 @@ Menu Main:  {{ partial "menu.html" (dict "page" . "menu" "main") }}`,
 
 	th.assertFileContent("public/sect2/p3/index.html", "Single",
 		"Menu Sect:  "+
-			"/sect5/|Section Five||10|-|-|"+
-			"/sect1/|Section One||100|-|-|"+
-			"/sect2/|Sect2s||0|-|HasMenuCurrent|"+
-			"/sect3/|Sect3s||0|-|-|")
+			"/sect5/|Section Five|Section Five|10|-|-|"+
+			"/sect1/|Section One|Section One|100|-|-|"+
+			"/sect2/|Sect2s|Sect2s|0|-|HasMenuCurrent|"+
+			"/sect3/|Sect3s|Sect3s|0|-|-|")
 
+}
+
+func TestMenuFrontMatter(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithSimpleConfigFile()
+
+	b.WithTemplatesAdded("index.html", `
+Main: {{ len .Site.Menus.main }}
+Other: {{ len .Site.Menus.other }}
+{{ range .Site.Menus.main }}
+* Main|{{ .Name }}: {{ .URL }}
+{{ end }}
+{{ range .Site.Menus.other }}
+* Other|{{ .Name }}: {{ .URL }}
+{{ end }}
+`)
+
+	// Issue #5828
+	b.WithContent("blog/page1.md", `
+---
+title: "P1"
+menu: main
+---
+
+`)
+
+	b.WithContent("blog/page2.md", `
+---
+title: "P2"
+menu: [main,other]
+---
+
+`)
+
+	b.WithContent("blog/page3.md", `
+---
+title: "P3"
+menu:
+  main:
+    weight: 30
+---
+`)
+
+	b.Build(BuildCfg{})
+
+	b.AssertFileContent("public/index.html",
+		"Main: 3", "Other: 1",
+		"Main|P1: /blog/page1/",
+		"Other|P2: /blog/page2/",
+	)
+
+}
+
+// https://github.com/gohugoio/hugo/issues/5849
+func TestMenuPageMultipleOutputFormats(t *testing.T) {
+
+	config := `
+baseURL = "https://example.com"
+
+# DAMP is similar to AMP, but not permalinkable.
+[outputFormats]
+[outputFormats.damp]
+mediaType = "text/html"
+path = "damp"
+
+`
+
+	b := newTestSitesBuilder(t).WithConfigFile("toml", config)
+	b.WithContent("_index.md", `
+---
+Title: Home Sweet Home
+outputs: [ "html", "amp" ]
+menu: "main"
+---
+
+`)
+
+	b.WithContent("blog/html-amp.md", `
+---
+Title: AMP and HTML
+outputs: [ "html", "amp" ]
+menu: "main"
+---
+
+`)
+
+	b.WithContent("blog/html.md", `
+---
+Title: HTML only
+outputs: [ "html" ]
+menu: "main"
+---
+
+`)
+
+	b.WithContent("blog/amp.md", `
+---
+Title: AMP only
+outputs: [ "amp" ]
+menu: "main"
+---
+
+`)
+
+	b.WithTemplatesAdded("index.html", `{{ range .Site.Menus.main }}{{ .Title }}|{{ .URL }}|{{ end }}`)
+
+	b.Build(BuildCfg{})
+
+	b.AssertFileContent("public/index.html", "AMP and HTML|/blog/html-amp/|AMP only|/amp/blog/amp/|HTML only|/blog/html/|Home Sweet Home|/|")
+	b.AssertFileContent("public/amp/index.html", "AMP and HTML|/amp/blog/html-amp/|AMP only|/amp/blog/amp/|HTML only|/blog/html/|Home Sweet Home|/amp/|")
 }

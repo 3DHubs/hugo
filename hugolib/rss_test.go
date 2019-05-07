@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ func TestRSSOutput(t *testing.T) {
 	// Section RSS
 	th.assertFileContent(filepath.Join("public", "sect", rssURI), "<?xml", "rss version", "Sects on RSSTest")
 	// Taxonomy RSS
-	th.assertFileContent(filepath.Join("public", "categories", "hugo", rssURI), "<?xml", "rss version", "Hugo on RSSTest")
+	th.assertFileContent(filepath.Join("public", "categories", "hugo", rssURI), "<?xml", "rss version", "hugo on RSSTest")
 
 	// RSS Item Limit
 	content := readDestination(t, fs, filepath.Join("public", rssURI))
@@ -55,6 +55,9 @@ func TestRSSOutput(t *testing.T) {
 	if c != rssLimit {
 		t.Errorf("incorrect RSS item count: expected %d, got %d", rssLimit, c)
 	}
+
+	// Encoded summary
+	th.assertFileContent(filepath.Join("public", rssURI), "<?xml", "description", "A &lt;em&gt;custom&lt;/em&gt; summary")
 }
 
 // Before Hugo 0.49 we set the pseudo page kind RSS on the page when output to RSS.
@@ -73,4 +76,25 @@ func TestRSSKind(t *testing.T) {
 	b.Build(BuildCfg{})
 
 	b.AssertFileContent("public/index.xml", "RSS Kind: home")
+}
+
+func TestRSSCanonifyURLs(t *testing.T) {
+	t.Parallel()
+
+	b := newTestSitesBuilder(t)
+	b.WithSimpleConfigFile().WithTemplatesAdded("index.rss.xml", `<rss>{{ range .Pages }}<item>{{ .Content | html }}</item>{{ end }}</rss>`)
+	b.WithContent("page.md", `---
+Title: My Page
+---
+
+Figure:
+
+{{< figure src="/images/sunset.jpg" title="Sunset" >}}
+
+
+
+`)
+	b.Build(BuildCfg{})
+
+	b.AssertFileContent("public/index.xml", "img src=&#34;http://example.com/images/sunset.jpg")
 }

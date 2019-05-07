@@ -15,16 +15,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gohugoio/hugo/codegen"
+	"github.com/gohugoio/hugo/resources/page/page_generate"
+
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
 const (
 	packageName  = "github.com/gohugoio/hugo"
-	noGitLdflags = "-X $PACKAGE/hugolib.BuildDate=$BUILD_DATE"
+	noGitLdflags = "-X $PACKAGE/common/hugo.buildDate=$BUILD_DATE"
 )
 
-var ldflags = "-X $PACKAGE/hugolib.CommitHash=$COMMIT_HASH -X $PACKAGE/hugolib.BuildDate=$BUILD_DATE"
+var ldflags = "-X $PACKAGE/common/hugo.commitHash=$COMMIT_HASH -X $PACKAGE/common/hugo.buildDate=$BUILD_DATE"
 
 // allow user to override go executable by running as GOEXE=xxx make ... on unix-like systems
 var goexe = "go"
@@ -64,7 +67,38 @@ func flagEnv() map[string]string {
 }
 
 func Generate() error {
-	return sh.RunWith(flagEnv(), goexe, "generate", path.Join(packageName, "tpl/tplimpl/embedded/generate"))
+	generatorPackages := []string{
+		"tpl/tplimpl/embedded/generate",
+		//"resources/page/generate",
+	}
+
+	for _, pkg := range generatorPackages {
+		if err := sh.RunWith(flagEnv(), goexe, "generate", path.Join(packageName, pkg)); err != nil {
+			return err
+		}
+	}
+
+	dir, _ := os.Getwd()
+	c := codegen.NewInspector(dir)
+
+	if err := page_generate.Generate(c); err != nil {
+		return err
+	}
+
+	goFmtPatterns := []string{
+		// TODO(bep) check: stat ./resources/page/*autogen*: no such file or directory
+		"./resources/page/page_marshaljson.autogen.go",
+		"./resources/page/page_wrappers.autogen.go",
+		"./resources/page/zero_file.autogen.go",
+	}
+
+	for _, pattern := range goFmtPatterns {
+		if err := sh.Run("gofmt", "-w", filepath.FromSlash(pattern)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Build hugo without git info

@@ -25,7 +25,7 @@ For information on creating shortcodes and templates that tap into Hugo's file-r
 The `.File` object contains the following fields:
 
 .File.Path
-: the original relative path of the page (e.g., `content/posts/foo.en.md`)
+: the original relative path of the page, relative to the content dir (e.g., `posts/foo.en.md`)
 
 .File.LogicalName
 : the name of the content file that represents a page (e.g., `foo.en.md`)
@@ -33,8 +33,12 @@ The `.File` object contains the following fields:
 .File.TranslationBaseName
 : the filename without extension or optional language identifier (e.g., `foo`)
 
+.File.ContentBaseName 
+: is a either TranslationBaseName or name of containing folder if file is a leaf bundle.
+  
 .File.BaseFileName
 : the filename without extension (e.g., `foo.en`)
+
 
 .File.Ext
 : the file extension of the content file (e.g., `md`); this can also be called using `.File.Extension` as well. Note that it is *only* the extension without `.`.

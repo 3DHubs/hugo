@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,27 +21,25 @@ import (
 	"testing"
 	"time"
 
-	"io/ioutil"
-	"log"
-	"os"
+	"github.com/gohugoio/hugo/htesting"
 
+	"github.com/gohugoio/hugo/common/hugo"
+	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/deps"
-	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugofs"
-	"github.com/gohugoio/hugo/i18n"
 	"github.com/gohugoio/hugo/langs"
+	"github.com/gohugoio/hugo/langs/i18n"
 	"github.com/gohugoio/hugo/tpl"
 	"github.com/gohugoio/hugo/tpl/internal"
 	"github.com/gohugoio/hugo/tpl/partials"
 	"github.com/spf13/afero"
-	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	logger = jww.NewNotepad(jww.LevelFatal, jww.LevelFatal, os.Stdout, ioutil.Discard, "", log.Ldate|log.Ltime)
+	logger = loggers.NewErrorLogger()
 )
 
 func newTestConfig() config.Provider {
@@ -61,6 +59,7 @@ func newDepsConfig(cfg config.Provider) deps.DepsCfg {
 	l := langs.NewLanguage("en", cfg)
 	return deps.DepsCfg{
 		Language:            l,
+		Site:                htesting.NewTestHugoSite(),
 		Cfg:                 cfg,
 		Fs:                  hugofs.NewMem(l),
 		Logger:              logger,
@@ -102,7 +101,7 @@ func TestTemplateFuncsExamples(t *testing.T) {
 	data.Title = "**BatMan**"
 	data.Section = "blog"
 	data.Params = map[string]interface{}{"langCode": "en"}
-	data.Hugo = map[string]interface{}{"Version": helpers.MustParseHugoVersion("0.36.1").Version()}
+	data.Hugo = map[string]interface{}{"Version": hugo.MustParseVersion("0.36.1").Version()}
 
 	for _, nsf := range internal.TemplateFuncsNamespaceRegistry {
 		ns := nsf(d)
@@ -220,22 +219,4 @@ func doBenchmarkPartial(b *testing.B, f func(ns *partials.Namespace) error) {
 			}
 		}
 	})
-}
-
-func newTestFuncster() *templateFuncster {
-	return newTestFuncsterWithViper(viper.New())
-}
-
-func newTestFuncsterWithViper(v *viper.Viper) *templateFuncster {
-	config := newDepsConfig(v)
-	d, err := deps.New(config)
-	if err != nil {
-		panic(err)
-	}
-
-	if err := d.LoadResources(); err != nil {
-		panic(err)
-	}
-
-	return d.Tmpl.(*templateHandler).html.funcster
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"html/template"
 	"os/exec"
+	"runtime"
 	"unicode"
 	"unicode/utf8"
 
@@ -41,6 +42,12 @@ import (
 // SummaryDivider denotes where content summarization should end. The default is "<!--more-->".
 var SummaryDivider = []byte("<!--more-->")
 
+var (
+	openingPTag        = []byte("<p>")
+	closingPTag        = []byte("</p>")
+	paragraphIndicator = []byte("<p")
+)
+
 // ContentSpec provides functionality to render markdown content.
 type ContentSpec struct {
 	BlackFriday                *BlackFriday
@@ -56,7 +63,7 @@ type ContentSpec struct {
 	Highlight            func(code, lang, optsStr string) (string, error)
 	defatultPygmentsOpts map[string]string
 
-	cfg config.Provider
+	Cfg config.Provider
 }
 
 // NewContentSpec returns a ContentSpec initialized
@@ -72,7 +79,7 @@ func NewContentSpec(cfg config.Provider) (*ContentSpec, error) {
 		BuildExpired:               cfg.GetBool("buildExpired"),
 		BuildDrafts:                cfg.GetBool("buildDrafts"),
 
-		cfg: cfg,
+		Cfg: cfg,
 	}
 
 	// Highlighting setup
@@ -118,6 +125,7 @@ type BlackFriday struct {
 	PlainIDAnchors        bool
 	Extensions            []string
 	ExtensionsMask        []string
+	SkipHTML              bool
 }
 
 // NewBlackfriday creates a new Blackfriday filled with site config or some sane defaults.
@@ -134,6 +142,7 @@ func newBlackfriday(config map[string]interface{}) *BlackFriday {
 		"latexDashes":           true,
 		"plainIDAnchors":        true,
 		"taskLists":             true,
+		"skipHTML":              false,
 	}
 
 	maps.ToLower(defaultParam)
@@ -144,10 +153,8 @@ func newBlackfriday(config map[string]interface{}) *BlackFriday {
 		siteConfig[k] = v
 	}
 
-	if config != nil {
-		for k, v := range config {
-			siteConfig[k] = v
-		}
+	for k, v := range config {
+		siteConfig[k] = v
 	}
 
 	combinedConfig := &BlackFriday{}
@@ -299,6 +306,10 @@ func (c *ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) b
 		htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
 	}
 
+	if ctx.Config.SkipHTML {
+		htmlFlags |= blackfriday.HTML_SKIP_HTML
+	}
+
 	return &HugoHTMLRenderer{
 		cs:               c,
 		RenderingContext: ctx,
@@ -375,7 +386,7 @@ func (c *ContentSpec) getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingConte
 	return &HugoMmarkHTMLRenderer{
 		cs:       c,
 		Renderer: mmark.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
-		Cfg:      c.cfg,
+		Cfg:      c.Cfg,
 	}
 }
 
@@ -575,6 +586,21 @@ func (c *ContentSpec) TruncateWordsToWholeSentence(s string) (string, bool) {
 	return strings.TrimSpace(s[:endIndex]), endIndex < len(s)
 }
 
+// TrimShortHTML removes the <p>/</p> tags from HTML input in the situation
+// where said tags are the only <p> tags in the input and enclose the content
+// of the input (whitespace excluded).
+func (c *ContentSpec) TrimShortHTML(input []byte) []byte {
+	first := bytes.Index(input, paragraphIndicator)
+	last := bytes.LastIndex(input, paragraphIndicator)
+	if first == last {
+		input = bytes.TrimSpace(input)
+		input = bytes.TrimPrefix(input, openingPTag)
+		input = bytes.TrimSuffix(input, closingPTag)
+		input = bytes.TrimSpace(input)
+	}
+	return input
+}
+
 func isEndOfSentence(r rune) bool {
 	return r == '.' || r == '?' || r == '!' || r == '"' || r == '\n'
 }
@@ -678,7 +704,6 @@ func getPythonExecPath() string {
 // getRstContent calls the Python script rst2html as an external helper
 // to convert reStructuredText content to HTML.
 func getRstContent(ctx *RenderingContext) []byte {
-	python := getPythonExecPath()
 	path := getRstExecPath()
 
 	if path == "" {
@@ -688,8 +713,19 @@ func getRstContent(ctx *RenderingContext) []byte {
 
 	}
 	jww.INFO.Println("Rendering", ctx.DocumentName, "with", path, "...")
-	args := []string{path, "--leave-comments", "--initial-header-level=2"}
-	result := externallyRenderContent(ctx, python, args)
+	var result []byte
+	// certain *nix based OSs wrap executables in scripted launchers
+	// invoking binaries on these OSs via python interpreter causes SyntaxError
+	// invoke directly so that shebangs work as expected
+	// handle Windows manually because it doesn't do shebangs
+	if runtime.GOOS == "windows" {
+		python := getPythonExecPath()
+		args := []string{path, "--leave-comments", "--initial-header-level=2"}
+		result = externallyRenderContent(ctx, python, args)
+	} else {
+		args := []string{"--leave-comments", "--initial-header-level=2"}
+		result = externallyRenderContent(ctx, path, args)
+	}
 	// TODO(bep) check if rst2html has a body only option.
 	bodyStart := bytes.Index(result, []byte("<body>\n"))
 	if bodyStart < 0 {
@@ -738,7 +774,7 @@ func externallyRenderContent(ctx *RenderingContext, path string, args []string) 
 	err := cmd.Run()
 	// Most external helpers exit w/ non-zero exit code only if severe, i.e.
 	// halting errors occurred. -> log stderr output regardless of state of err
-	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
+	for _, item := range strings.Split(cmderr.String(), "\n") {
 		item := strings.TrimSpace(item)
 		if item != "" {
 			jww.ERROR.Printf("%s: %s", ctx.DocumentName, item)

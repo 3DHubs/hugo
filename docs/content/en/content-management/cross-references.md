@@ -35,14 +35,14 @@ The single parameter to `ref` is a string with a content `documentname` (e.g., `
 
 **Paths without a leading `/` will first  be tried resolved relative to the current page.**
 
-You will get an error if you document could not be uniquely resolved. The error behaviour can be configured, see below.
+You will get an error if your document could not be uniquely resolved. The error behaviour can be configured, see below.
 
 ### Link to another language version
 
 Link to another language version of a document, you need to use this syntax:
 
 ```go-html-template
-{{</* relref path="document.md" lang="jp" */>}}
+{{</* relref path="document.md" lang="ja" */>}}
 ```
 
 ### Get another Output Format
@@ -76,7 +76,7 @@ More information about document unique identifiers and headings can be found [be
 The behaviour can, since Hugo 0.45, be configured in `config.toml`:
 
 refLinksErrorLevel ("ERROR") 
-: When using `ref` or `relref` to resolve page links and a link cannot resolved, it will be logged with this logg level. Valid values are `ERROR` (default) or `WARNING`. Any `ERROR` will fail the build (`exit -1`).
+: When using `ref` or `relref` to resolve page links and a link cannot resolved, it will be logged with this log level. Valid values are `ERROR` (default) or `WARNING`. Any `ERROR` will fail the build (`exit -1`).
 
 refLinksNotFoundURL
 : URL to be used as a placeholder when a page reference cannot be found in `ref` or `relref`. Is used as-is.

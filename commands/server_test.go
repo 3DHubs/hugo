@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestServer(t *testing.T) {
 		t.Skip("Skip server test on appveyor")
 	}
 	assert := require.New(t)
-	dir, err := createSimpleTestSite(t)
+	dir, err := createSimpleTestSite(t, testSiteConfig{})
 	assert.NoError(err)
 
 	// Let us hope that this port is available on all systems ...
@@ -67,6 +68,7 @@ func TestServer(t *testing.T) {
 	homeContent := helpers.ReaderToString(resp.Body)
 
 	assert.Contains(homeContent, "List: Hugo Commands")
+	assert.Contains(homeContent, "Environment: development")
 
 	// Stop the server.
 	stop <- true
@@ -95,22 +97,36 @@ func TestFixURL(t *testing.T) {
 		{"No config", "", "", true, 1313, "//localhost:1313/"},
 	}
 
-	for i, test := range tests {
-		b := newCommandsBuilder()
-		s := b.newServerCmd()
-		v := viper.New()
-		baseURL := test.CLIBaseURL
-		v.Set("baseURL", test.CfgBaseURL)
-		s.serverAppend = test.AppendPort
-		s.serverPort = test.Port
-		result, err := s.fixURL(v, baseURL, s.serverPort)
-		if err != nil {
-			t.Errorf("Test #%d %s: unexpected error %s", i, test.TestName, err)
-		}
-		if result != test.Result {
-			t.Errorf("Test #%d %s: expected %q, got %q", i, test.TestName, test.Result, result)
-		}
+	for _, test := range tests {
+		t.Run(test.TestName, func(t *testing.T) {
+			b := newCommandsBuilder()
+			s := b.newServerCmd()
+			v := viper.New()
+			baseURL := test.CLIBaseURL
+			v.Set("baseURL", test.CfgBaseURL)
+			s.serverAppend = test.AppendPort
+			s.serverPort = test.Port
+			result, err := s.fixURL(v, baseURL, s.serverPort)
+			if err != nil {
+				t.Errorf("Unexpected error %s", err)
+			}
+			if result != test.Result {
+				t.Errorf("Expected %q, got %q", test.Result, result)
+			}
+		})
 	}
+}
+
+func TestRemoveErrorPrefixFromLog(t *testing.T) {
+	assert := require.New(t)
+	content := `ERROR 2018/10/07 13:11:12 Error while rendering "home": template: _default/baseof.html:4:3: executing "main" at <partial "logo" .>: error calling partial: template: partials/logo.html:5:84: executing "partials/logo.html" at <$resized.AHeight>: can't evaluate field AHeight in type *resource.Image
+ERROR 2018/10/07 13:11:12 Rebuild failed: logged 1 error(s)
+`
+
+	withoutError := removeErrorPrefixFromLog(content)
+
+	assert.False(strings.Contains(withoutError, "ERROR"), withoutError)
+
 }
 
 func isWindowsCI() bool {

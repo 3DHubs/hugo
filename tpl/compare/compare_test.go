@@ -21,12 +21,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gohugoio/hugo/helpers"
-
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type T struct {
+	NonEmptyInterfaceNil      I
+	NonEmptyInterfaceTypedNil I
+}
+
+type I interface {
+	Foo() string
+}
+
+func (t *T) Foo() string {
+	return "foo"
+}
+
+var testT = &T{
+	NonEmptyInterfaceTypedNil: (*T)(nil),
+}
 
 type tstEqerType1 string
 type tstEqerType2 string
@@ -173,18 +189,23 @@ func doTestCompare(t *testing.T, tp tstCompareType, funcUnderTest func(a, b inte
 		{tstEqerType1("a"), tstEqerType2("a"), 0},
 		{tstEqerType2("a"), tstEqerType1("a"), 0},
 		{tstEqerType2("a"), tstEqerType1("b"), -1},
-		{helpers.MustParseHugoVersion("0.32.1").Version(), helpers.MustParseHugoVersion("0.32").Version(), 1},
-		{helpers.MustParseHugoVersion("0.35").Version(), helpers.MustParseHugoVersion("0.32").Version(), 1},
-		{helpers.MustParseHugoVersion("0.36").Version(), helpers.MustParseHugoVersion("0.36").Version(), 0},
-		{helpers.MustParseHugoVersion("0.32").Version(), helpers.MustParseHugoVersion("0.36").Version(), -1},
-		{helpers.MustParseHugoVersion("0.32").Version(), "0.36", -1},
-		{"0.36", helpers.MustParseHugoVersion("0.32").Version(), 1},
-		{"0.36", helpers.MustParseHugoVersion("0.36").Version(), 0},
-		{"0.37", helpers.MustParseHugoVersion("0.37-DEV").Version(), 1},
-		{"0.37-DEV", helpers.MustParseHugoVersion("0.37").Version(), -1},
-		{"0.36", helpers.MustParseHugoVersion("0.37-DEV").Version(), -1},
-		{"0.37-DEV", helpers.MustParseHugoVersion("0.37-DEV").Version(), 0},
+		{hugo.MustParseVersion("0.32.1").Version(), hugo.MustParseVersion("0.32").Version(), 1},
+		{hugo.MustParseVersion("0.35").Version(), hugo.MustParseVersion("0.32").Version(), 1},
+		{hugo.MustParseVersion("0.36").Version(), hugo.MustParseVersion("0.36").Version(), 0},
+		{hugo.MustParseVersion("0.32").Version(), hugo.MustParseVersion("0.36").Version(), -1},
+		{hugo.MustParseVersion("0.32").Version(), "0.36", -1},
+		{"0.36", hugo.MustParseVersion("0.32").Version(), 1},
+		{"0.36", hugo.MustParseVersion("0.36").Version(), 0},
+		{"0.37", hugo.MustParseVersion("0.37-DEV").Version(), 1},
+		{"0.37-DEV", hugo.MustParseVersion("0.37").Version(), -1},
+		{"0.36", hugo.MustParseVersion("0.37-DEV").Version(), -1},
+		{"0.37-DEV", hugo.MustParseVersion("0.37-DEV").Version(), 0},
+		// https://github.com/gohugoio/hugo/issues/5905
+		{nil, nil, 0},
+		{testT.NonEmptyInterfaceNil, nil, 0},
+		{testT.NonEmptyInterfaceTypedNil, nil, 0},
 	} {
+
 		result := funcUnderTest(test.left, test.right)
 		success := false
 
@@ -207,7 +228,7 @@ func doTestCompare(t *testing.T, tp tstCompareType, funcUnderTest func(a, b inte
 		}
 
 		if !success {
-			t.Errorf("[%d][%s] %v compared to %v: %t", i, path.Base(runtime.FuncForPC(reflect.ValueOf(funcUnderTest).Pointer()).Name()), test.left, test.right, result)
+			t.Fatalf("[%d][%s] %v compared to %v: %t", i, path.Base(runtime.FuncForPC(reflect.ValueOf(funcUnderTest).Pointer()).Name()), test.left, test.right, result)
 		}
 	}
 }

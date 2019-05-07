@@ -1,4 +1,4 @@
-// Copyright 2017-present The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,12 @@
 package source
 
 import (
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/spf13/afero"
+	"github.com/gohugoio/hugo/common/hugio"
 
 	"github.com/gohugoio/hugo/hugofs"
 
@@ -35,14 +33,34 @@ var (
 )
 
 // File represents a source file.
+// This is a temporary construct until we resolve page.Page conflicts.
+// TODO(bep) remove this construct once we have resolved page deprecations
 type File interface {
+	fileOverlap
+	FileWithoutOverlap
+}
 
-	// Filename gets the full path and filename to the file.
-	Filename() string
-
+// Temporary to solve duplicate/deprecated names in page.Page
+type fileOverlap interface {
 	// Path gets the relative path including file name and extension.
 	// The directory is relative to the content root.
 	Path() string
+
+	// Section is first directory below the content root.
+	// For page bundles in root, the Section will be empty.
+	Section() string
+
+	// Lang is the language code for this page. It will be the
+	// same as the site's language code.
+	Lang() string
+
+	IsZero() bool
+}
+
+type FileWithoutOverlap interface {
+
+	// Filename gets the full path and filename to the file.
+	Filename() string
 
 	// Dir gets the name of the directory that contains this file.
 	// The directory is relative to the content root.
@@ -50,18 +68,12 @@ type File interface {
 
 	// Extension gets the file extension, i.e "myblogpost.md" will return "md".
 	Extension() string
+
 	// Ext is an alias for Extension.
 	Ext() string // Hmm... Deprecate Extension
 
-	// Lang for this page, if `Multilingual` is enabled on your site.
-	Lang() string
-
 	// LogicalName is filename and extension of the file.
 	LogicalName() string
-
-	// Section is first directory below the content root.
-	// For page bundles in root, the Section will be empty.
-	Section() string
 
 	// BaseFileName is a filename without extension.
 	BaseFileName() string
@@ -70,19 +82,21 @@ type File interface {
 	// not even the optional language extension part.
 	TranslationBaseName() string
 
+	// ContentBaseName is a either TranslationBaseName or name of containing folder
+	// if file is a leaf bundle.
+	ContentBaseName() string
+
 	// UniqueID is the MD5 hash of the file's path and is for most practical applications,
 	// Hugo content files being one of them, considered to be unique.
 	UniqueID() string
 
 	FileInfo() os.FileInfo
-
-	String() string
 }
 
 // A ReadableFile is a File that is readable.
 type ReadableFile interface {
 	File
-	Open() (io.ReadCloser, error)
+	Open() (hugio.ReadSeekCloser, error)
 }
 
 // FileInfo describes a source file.
@@ -106,6 +120,7 @@ type FileInfo struct {
 	relPath             string
 	baseName            string
 	translationBaseName string
+	contentBaseName     string
 	section             string
 	isLeafBundle        bool
 
@@ -144,6 +159,13 @@ func (fi *FileInfo) BaseFileName() string { return fi.baseName }
 // language segement (ie. "page").
 func (fi *FileInfo) TranslationBaseName() string { return fi.translationBaseName }
 
+// ContentBaseName is a either TranslationBaseName or name of containing folder
+// if file is a leaf bundle.
+func (fi *FileInfo) ContentBaseName() string {
+	fi.init()
+	return fi.contentBaseName
+}
+
 // Section returns a file's section.
 func (fi *FileInfo) Section() string {
 	fi.init()
@@ -162,9 +184,13 @@ func (fi *FileInfo) FileInfo() os.FileInfo { return fi.fi }
 func (fi *FileInfo) String() string { return fi.BaseFileName() }
 
 // Open implements ReadableFile.
-func (fi *FileInfo) Open() (io.ReadCloser, error) {
+func (fi *FileInfo) Open() (hugio.ReadSeekCloser, error) {
 	f, err := fi.sp.SourceFs.Open(fi.Filename())
 	return f, err
+}
+
+func (fi *FileInfo) IsZero() bool {
+	return fi == nil
 }
 
 // We create a lot of these FileInfo objects, but there are parts of it used only
@@ -177,12 +203,26 @@ func (fi *FileInfo) init() {
 		if (!fi.isLeafBundle && len(parts) == 1) || len(parts) > 1 {
 			section = parts[0]
 		}
-
 		fi.section = section
 
-		fi.uniqueID = helpers.MD5String(filepath.ToSlash(fi.relPath))
+		if fi.isLeafBundle && len(parts) > 0 {
+			fi.contentBaseName = parts[len(parts)-1]
+		} else {
+			fi.contentBaseName = fi.translationBaseName
+		}
 
+		fi.uniqueID = helpers.MD5String(filepath.ToSlash(fi.relPath))
 	})
+}
+
+// NewTestFile creates a partially filled File used in unit tests.
+// TODO(bep) improve this package
+func NewTestFile(filename string) *FileInfo {
+	base := filepath.Base(filepath.Dir(filename))
+	return &FileInfo{
+		filename:            filename,
+		translationBaseName: base,
+	}
 }
 
 // NewFileInfo returns a new FileInfo structure.
@@ -247,25 +287,4 @@ func (sp *SourceSpec) NewFileInfo(baseDir, filename string, isLeafBundle bool, f
 
 	return f
 
-}
-
-func printFs(fs afero.Fs, path string, w io.Writer) {
-	if fs == nil {
-		return
-	}
-	afero.Walk(fs, path, func(path string, info os.FileInfo, err error) error {
-
-		if info != nil && !info.IsDir() {
-
-			s := path
-			if lang, ok := info.(hugofs.LanguageAnnouncer); ok {
-				s = s + "\t" + lang.Lang()
-			}
-			if fp, ok := info.(hugofs.FilePather); ok {
-				s = s + "\t" + fp.Filename()
-			}
-			fmt.Fprintln(w, "    ", s)
-		}
-		return nil
-	})
 }

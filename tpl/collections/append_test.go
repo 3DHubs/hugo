@@ -18,11 +18,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/alecthomas/assert"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/stretchr/testify/require"
 )
 
+// Also see tests in common/collection.
 func TestAppend(t *testing.T) {
 	t.Parallel()
 
@@ -36,16 +36,6 @@ func TestAppend(t *testing.T) {
 		{[]string{"a", "b"}, []interface{}{"c"}, []string{"a", "b", "c"}},
 		{[]string{"a", "b"}, []interface{}{"c", "d", "e"}, []string{"a", "b", "c", "d", "e"}},
 		{[]string{"a", "b"}, []interface{}{[]string{"c", "d", "e"}}, []string{"a", "b", "c", "d", "e"}},
-		{nil, []interface{}{"a", "b"}, []string{"a", "b"}},
-		{nil, []interface{}{nil}, []interface{}{nil}},
-		{tstSlicers{&tstSlicer{"a"}, &tstSlicer{"b"}},
-			[]interface{}{&tstSlicer{"c"}},
-			tstSlicers{&tstSlicer{"a"}, &tstSlicer{"b"}, &tstSlicer{"c"}}},
-		{&tstSlicers{&tstSlicer{"a"}, &tstSlicer{"b"}},
-			[]interface{}{&tstSlicer{"c"}},
-			tstSlicers{&tstSlicer{"a"},
-				&tstSlicer{"b"},
-				&tstSlicer{"c"}}},
 		// Errors
 		{"", []interface{}{[]string{"a", "b"}}, false},
 		{[]string{"a", "b"}, []interface{}{}, false},
@@ -73,5 +63,4 @@ func TestAppend(t *testing.T) {
 		}
 	}
 
-	assert.Len(t, ns.Slice(), 0)
 }

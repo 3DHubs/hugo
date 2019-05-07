@@ -64,6 +64,48 @@ func TestWhere(t *testing.T) {
 			},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0,
+			expect: []map[string]float64{{"a": 3, "b": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "!=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 5, "x": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "<",
+			expect: []map[string]float64{{"a": 1, "b": 2}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "<=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 3, "b": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 3}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 2.0, op: ">",
+			expect: []map[string]float64{{"a": 3, "b": 3}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 3}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 2.0, op: ">=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 3, "b": 3}},
+		},
+		{
 			seq: []TstX{
 				{A: "a", B: "b"}, {A: "c", B: "d"}, {A: "e", B: "f"},
 			},
@@ -111,6 +153,15 @@ func TestWhere(t *testing.T) {
 		{
 			seq: []map[string]TstX{
 				{"foo": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "c", B: "d"}}, {"foo": TstX{A: "e", B: "f"}},
+			},
+			key: "foo.B", match: "d",
+			expect: []map[string]TstX{
+				{"foo": TstX{A: "c", B: "d"}},
+			},
+		},
+		{
+			seq: []map[string]TstX{
+				{"baz": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "c", B: "d"}}, {"foo": TstX{A: "e", B: "f"}},
 			},
 			key: "foo.B", match: "d",
 			expect: []map[string]TstX{
@@ -181,6 +232,15 @@ func TestWhere(t *testing.T) {
 			},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: ">", match: 3.0,
+			expect: []map[string]float64{
+				{"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+		},
+		{
 			seq: []TstX{
 				{A: "a", B: "b"}, {A: "c", B: "d"}, {A: "e", B: "f"},
 			},
@@ -195,6 +255,15 @@ func TestWhere(t *testing.T) {
 			},
 			key: "b", op: "in", match: []int{3, 4, 5},
 			expect: []map[string]int{
+				{"a": 3, "b": 4},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "in", match: []float64{3, 4, 5},
+			expect: []map[string]float64{
 				{"a": 3, "b": 4},
 			},
 		},
@@ -280,6 +349,15 @@ func TestWhere(t *testing.T) {
 			},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "in", match: ns.Slice(3.0, 4.0, 5.0),
+			expect: []map[string]float64{
+				{"a": 3, "b": 4},
+			},
+		},
+		{
 			seq: []map[string]time.Time{
 				{"a": d1, "b": d2}, {"a": d3, "b": d4}, {"a": d5, "b": d6},
 			},
@@ -332,6 +410,31 @@ func TestWhere(t *testing.T) {
 			expect: []map[string]int{},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "", match: nil,
+			expect: []map[string]float64{
+				{"a": 3},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "!=", match: nil,
+			expect: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 5, "b": 6},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: ">", match: nil,
+			expect: []map[string]float64{},
+		},
+		{
 			seq: []map[string]bool{
 				{"a": true, "b": false}, {"c": true, "b": true}, {"d": true, "b": false},
 			},
@@ -356,9 +459,17 @@ func TestWhere(t *testing.T) {
 			key: "b", op: ">", match: false,
 			expect: []map[string]bool{},
 		},
+		{
+			seq: []map[string]bool{
+				{"a": true, "b": false}, {"c": true, "b": true}, {"d": true, "b": false},
+			},
+			key: "b.z", match: false,
+			expect: []map[string]bool{},
+		},
 		{seq: (*[]TstX)(nil), key: "A", match: "a", expect: false},
 		{seq: TstX{A: "a", B: "b"}, key: "A", match: "a", expect: false},
-		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B", match: "d", expect: false},
+		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B", match: "d", expect: []map[string]*TstX{}},
+		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B.Z", match: "d", expect: []map[string]*TstX{}},
 		{
 			seq: []TstX{
 				{A: "a", B: "b"}, {A: "c", B: "d"}, {A: "e", B: "f"},
@@ -390,27 +501,28 @@ func TestWhere(t *testing.T) {
 			},
 		},
 	} {
-		var results interface{}
-		var err error
+		t.Run(fmt.Sprintf("test case %d for key %s", i, test.key), func(t *testing.T) {
+			var results interface{}
+			var err error
 
-		if len(test.op) > 0 {
-			results, err = ns.Where(test.seq, test.key, test.op, test.match)
-		} else {
-			results, err = ns.Where(test.seq, test.key, test.match)
-		}
-		if b, ok := test.expect.(bool); ok && !b {
-			if err == nil {
-				t.Errorf("[%d] Where didn't return an expected error", i)
+			if len(test.op) > 0 {
+				results, err = ns.Where(test.seq, test.key, test.op, test.match)
+			} else {
+				results, err = ns.Where(test.seq, test.key, test.match)
 			}
-		} else {
-			if err != nil {
-				t.Errorf("[%d] failed: %s", i, err)
-				continue
+			if b, ok := test.expect.(bool); ok && !b {
+				if err == nil {
+					t.Errorf("[%d] Where didn't return an expected error", i)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("[%d] failed: %s", i, err)
+				}
+				if !reflect.DeepEqual(results, test.expect) {
+					t.Errorf("[%d] Where clause matching %v with %v, got %v but expected %v", i, test.key, test.match, results, test.expect)
+				}
 			}
-			if !reflect.DeepEqual(results, test.expect) {
-				t.Errorf("[%d] Where clause matching %v with %v, got %v but expected %v", i, test.key, test.match, results, test.expect)
-			}
-		}
+		})
 	}
 
 	var err error

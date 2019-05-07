@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,13 +18,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gohugoio/hugo/resources/page"
+
 	"html/template"
 
 	"github.com/gohugoio/hugo/deps"
 	"github.com/stretchr/testify/require"
 )
 
-const slugDoc1 = "---\ntitle: slug doc 1\nslug: slug-doc-1\naliases:\n - sd1/foo/\n - sd2\n - sd3/\n - sd4.html\n---\nslug doc 1 content\n"
+const slugDoc1 = "---\ntitle: slug doc 1\nslug: slug-doc-1\naliases:\n - /sd1/foo/\n - /sd2\n - /sd3/\n - /sd4.html\n---\nslug doc 1 content\n"
 
 const slugDoc2 = `---
 title: slug doc 2
@@ -115,14 +117,14 @@ Do not go gentle into that good night.
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{SkipRender: true})
 
-	assert.Len(s.RegularPages, 2)
+	assert.Len(s.RegularPages(), 2)
 
-	notUgly := s.getPage(KindPage, "sect1/p1.md")
+	notUgly := s.getPage(page.KindPage, "sect1/p1.md")
 	assert.NotNil(notUgly)
 	assert.Equal("sect1", notUgly.Section())
 	assert.Equal("/sect1/p1/", notUgly.RelPermalink())
 
-	ugly := s.getPage(KindPage, "sect2/p2.md")
+	ugly := s.getPage(page.KindPage, "sect2/p2.md")
 	assert.NotNil(ugly)
 	assert.Equal("sect2", ugly.Section())
 	assert.Equal("/sect2/p2.html", ugly.RelPermalink())
@@ -173,9 +175,9 @@ Do not go gentle into that good night.
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
 
-	assert.Len(s.RegularPages, 10)
+	assert.Len(s.RegularPages(), 10)
 
-	sect1 := s.getPage(KindSection, "sect1")
+	sect1 := s.getPage(page.KindSection, "sect1")
 	assert.NotNil(sect1)
 	assert.Equal("/ss1/", sect1.RelPermalink())
 	th.assertFileContent(filepath.Join("public", "ss1", "index.html"), "P1|URL: /ss1/|Next: /ss1/page/2/")

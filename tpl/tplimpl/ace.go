@@ -1,4 +1,4 @@
-// Copyright 2017-present The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package tplimpl
 
 import (
-	"html/template"
 	"path/filepath"
 
 	"strings"
@@ -52,15 +51,17 @@ func (t *templateHandler) addAceTemplate(name, basePath, innerPath string, baseC
 		return err
 	}
 
-	if err := applyTemplateTransformersToHMLTTemplate(templ); err != nil {
+	typ := resolveTemplateType(name)
+
+	c, err := applyTemplateTransformersToHMLTTemplate(typ, templ)
+	if err != nil {
 		return err
 	}
 
-	if strings.Contains(name, "shortcodes") {
-		// We need to keep track of one ot the output format's shortcode template
-		// without knowing the rendering context.
-		clone := template.Must(templ.Clone())
-		t.html.t.AddParseTree(withoutExt, clone.Tree)
+	if typ == templateShortcode {
+		t.addShortcodeVariant(name, c.Info, templ)
+	} else {
+		t.templateInfo[name] = c.Info
 	}
 
 	return nil

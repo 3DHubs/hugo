@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,15 +19,28 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os/signal"
+	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"sync/atomic"
+
+	"github.com/gohugoio/hugo/hugofs"
+
+	"github.com/gohugoio/hugo/resources/page"
+
+	"github.com/gohugoio/hugo/common/hugo"
+	"github.com/pkg/errors"
+
+	"github.com/gohugoio/hugo/common/herrors"
+	"github.com/gohugoio/hugo/common/loggers"
+	"github.com/gohugoio/hugo/common/terminal"
+
 	"syscall"
 
 	"github.com/gohugoio/hugo/hugolib/filesystems"
 
 	"golang.org/x/sync/errgroup"
 
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,7 +49,7 @@ import (
 
 	"github.com/gohugoio/hugo/config"
 
-	"github.com/gohugoio/hugo/parser"
+	"github.com/gohugoio/hugo/parser/metadecoders"
 	flag "github.com/spf13/pflag"
 
 	"github.com/fsnotify/fsnotify"
@@ -85,7 +98,7 @@ func Execute(args []string) Response {
 	}
 
 	if err == nil {
-		errCount := int(jww.LogCountForLevelsGreaterThanorEqualTo(jww.LevelError))
+		errCount := int(loggers.GlobalErrorCounter.Count())
 		if errCount > 0 {
 			err = fmt.Errorf("logged %d errors", errCount)
 		} else if resp.Result != nil {
@@ -118,13 +131,13 @@ func initializeConfig(mustHaveConfigFile, running bool,
 
 }
 
-func (c *commandeer) createLogger(cfg config.Provider) (*jww.Notepad, error) {
+func (c *commandeer) createLogger(cfg config.Provider, running bool) (*loggers.Logger, error) {
 	var (
 		logHandle       = ioutil.Discard
 		logThreshold    = jww.LevelWarn
 		logFile         = cfg.GetString("logFile")
 		outHandle       = os.Stdout
-		stdoutThreshold = jww.LevelError
+		stdoutThreshold = jww.LevelWarn
 	)
 
 	if c.h.verboseLog || c.h.logging || (c.h.logFile != "") {
@@ -155,13 +168,10 @@ func (c *commandeer) createLogger(cfg config.Provider) (*jww.Notepad, error) {
 		}
 	}
 
-	// The global logger is used in some few cases.
-	jww.SetLogOutput(logHandle)
-	jww.SetLogThreshold(logThreshold)
-	jww.SetStdoutThreshold(stdoutThreshold)
+	loggers.InitGlobalLogger(stdoutThreshold, logThreshold, outHandle, logHandle)
 	helpers.InitLoggers()
 
-	return jww.NewNotepad(stdoutThreshold, logThreshold, outHandle, logHandle, "", log.Ldate|log.Ltime), nil
+	return loggers.NewLogger(stdoutThreshold, logThreshold, outHandle, logHandle, running), nil
 }
 
 func initializeFlags(cmd *cobra.Command, cfg config.Provider) {
@@ -194,21 +204,28 @@ func initializeFlags(cmd *cobra.Command, cfg config.Provider) {
 		"buildWatch",
 		"cacheDir",
 		"cfgFile",
+		"confirm",
 		"contentDir",
 		"debug",
 		"destination",
 		"disableKinds",
+		"dryRun",
+		"force",
 		"gc",
+		"i18n-warnings",
+		"invalidateCDN",
 		"layoutDir",
 		"logFile",
-		"i18n-warnings",
+		"maxDeletes",
 		"quiet",
 		"renderToMemory",
 		"source",
+		"target",
 		"theme",
 		"themesDir",
 		"verbose",
 		"verboseLog",
+		"duplicateTargetPaths",
 	}
 
 	// Will set a value even if it is the default.
@@ -230,6 +247,7 @@ func initializeFlags(cmd *cobra.Command, cfg config.Provider) {
 	// Set some "config aliases"
 	setValueFromFlag(cmd.Flags(), "destination", cfg, "publishDir", false)
 	setValueFromFlag(cmd.Flags(), "i18n-warnings", cfg, "logI18nWarnings", false)
+	setValueFromFlag(cmd.Flags(), "path-warnings", cfg, "logPathWarnings", false)
 
 }
 
@@ -251,11 +269,25 @@ func setValueFromFlag(flags *flag.FlagSet, key string, cfg config.Provider, targ
 		case "stringSlice":
 			bv, _ := flags.GetStringSlice(key)
 			cfg.Set(configKey, bv)
+		case "int":
+			iv, _ := flags.GetInt(key)
+			cfg.Set(configKey, iv)
 		default:
 			panic(fmt.Sprintf("update switch with %s", f.Value.Type()))
 		}
 
 	}
+}
+
+func isTerminal() bool {
+	return terminal.IsTerminal(os.Stdout)
+
+}
+func ifTerminal(s string) string {
+	if !isTerminal() {
+		return ""
+	}
+	return s
 }
 
 func (c *commandeer) fullBuild() error {
@@ -265,19 +297,22 @@ func (c *commandeer) fullBuild() error {
 	)
 
 	if !c.h.quiet {
-		fmt.Print(hideCursor + "Building sites … ")
-		defer func() {
-			fmt.Print(showCursor + clearLine)
-		}()
+		fmt.Print(ifTerminal(hideCursor) + "Building sites … ")
+		if isTerminal() {
+			defer func() {
+				fmt.Print(showCursor + clearLine)
+			}()
+		}
 	}
 
 	copyStaticFunc := func() error {
+
 		cnt, err := c.copyStatic()
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return fmt.Errorf("Error copying static files: %s", err)
+				return errors.Wrap(err, "Error copying static files")
 			}
-			c.Logger.WARN.Println("No Static directory found")
+			c.logger.INFO.Println("No Static directory found")
 		}
 		langCount = cnt
 		langCount = cnt
@@ -285,7 +320,7 @@ func (c *commandeer) fullBuild() error {
 	}
 	buildSitesFunc := func() error {
 		if err := c.buildSites(); err != nil {
-			return fmt.Errorf("Error building site: %s", err)
+			return errors.Wrap(err, "Error building site")
 		}
 		return nil
 	}
@@ -308,7 +343,7 @@ func (c *commandeer) fullBuild() error {
 	}
 
 	for _, s := range c.hugo.Sites {
-		s.ProcessingStats.Static = langCount[s.Language.Lang]
+		s.ProcessingStats.Static = langCount[s.Language().Lang]
 	}
 
 	if c.h.gc {
@@ -326,8 +361,124 @@ func (c *commandeer) fullBuild() error {
 
 }
 
+func (c *commandeer) initCPUProfile() (func(), error) {
+	if c.h.cpuprofile == "" {
+		return nil, nil
+	}
+
+	f, err := os.Create(c.h.cpuprofile)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create CPU profile")
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		return nil, errors.Wrap(err, "failed to start CPU profile")
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		f.Close()
+	}, nil
+}
+
+func (c *commandeer) initMemProfile() {
+	if c.h.memprofile == "" {
+		return
+	}
+
+	f, err := os.Create(c.h.memprofile)
+	if err != nil {
+		c.logger.ERROR.Println("could not create memory profile: ", err)
+	}
+	defer f.Close()
+	runtime.GC() // get up-to-date statistics
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		c.logger.ERROR.Println("could not write memory profile: ", err)
+	}
+}
+
+func (c *commandeer) initTraceProfile() (func(), error) {
+	if c.h.traceprofile == "" {
+		return nil, nil
+	}
+
+	f, err := os.Create(c.h.traceprofile)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create trace file")
+	}
+
+	if err := trace.Start(f); err != nil {
+		return nil, errors.Wrap(err, "failed to start trace")
+	}
+
+	return func() {
+		trace.Stop()
+		f.Close()
+	}, nil
+}
+
+func (c *commandeer) initMutexProfile() (func(), error) {
+	if c.h.mutexprofile == "" {
+		return nil, nil
+	}
+
+	f, err := os.Create(c.h.mutexprofile)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.SetMutexProfileFraction(1)
+
+	return func() {
+		pprof.Lookup("mutex").WriteTo(f, 0)
+		f.Close()
+	}, nil
+
+}
+
+func (c *commandeer) initProfiling() (func(), error) {
+	stopCPUProf, err := c.initCPUProfile()
+	if err != nil {
+		return nil, err
+	}
+
+	stopMutexProf, err := c.initMutexProfile()
+	if err != nil {
+		return nil, err
+	}
+
+	stopTraceProf, err := c.initTraceProfile()
+	if err != nil {
+		return nil, err
+	}
+
+	return func() {
+		c.initMemProfile()
+
+		if stopCPUProf != nil {
+			stopCPUProf()
+		}
+		if stopMutexProf != nil {
+			stopMutexProf()
+		}
+
+		if stopTraceProf != nil {
+			stopTraceProf()
+		}
+	}, nil
+}
+
 func (c *commandeer) build() error {
 	defer c.timeTrack(time.Now(), "Total")
+
+	stopProfiling, err := c.initProfiling()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if stopProfiling != nil {
+			stopProfiling()
+		}
+	}()
 
 	if err := c.fullBuild(); err != nil {
 		return err
@@ -338,6 +489,13 @@ func (c *commandeer) build() error {
 		fmt.Println()
 		c.hugo.PrintProcessingStats(os.Stdout)
 		fmt.Println()
+
+		if createCounter, ok := c.destinationFs.(hugofs.DuplicatesReporter); ok {
+			dupes := createCounter.ReportDuplicates()
+			if dupes != "" {
+				c.logger.WARN.Println("Duplicate target paths:", dupes)
+			}
+		}
 	}
 
 	if c.h.buildWatch {
@@ -345,13 +503,13 @@ func (c *commandeer) build() error {
 		if err != nil {
 			return err
 		}
-		c.Logger.FEEDBACK.Println("Watching for changes in", c.hugo.PathSpec.AbsPathify(c.Cfg.GetString("contentDir")))
-		c.Logger.FEEDBACK.Println("Press Ctrl+C to stop")
+		c.logger.FEEDBACK.Println("Watching for changes in", c.hugo.PathSpec.AbsPathify(c.Cfg.GetString("contentDir")))
+		c.logger.FEEDBACK.Println("Press Ctrl+C to stop")
 		watcher, err := c.newWatcher(watchDirs...)
 		checkErr(c.Logger, err)
 		defer watcher.Close()
 
-		var sigs = make(chan os.Signal)
+		var sigs = make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 		<-sigs
@@ -362,6 +520,17 @@ func (c *commandeer) build() error {
 
 func (c *commandeer) serverBuild() error {
 	defer c.timeTrack(time.Now(), "Total")
+
+	stopProfiling, err := c.initProfiling()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if stopProfiling != nil {
+			stopProfiling()
+		}
+	}()
 
 	if err := c.fullBuild(); err != nil {
 		return err
@@ -388,7 +557,7 @@ func (c *commandeer) doWithPublishDirs(f func(sourceFs *filesystems.SourceFilesy
 	staticFilesystems := c.hugo.BaseFs.SourceFilesystems.Static
 
 	if len(staticFilesystems) == 0 {
-		c.Logger.WARN.Println("No static directories found to sync")
+		c.logger.INFO.Println("No static directories found to sync")
 		return langCount, nil
 	}
 
@@ -448,19 +617,17 @@ func (c *commandeer) copyStaticTo(sourceFs *filesystems.SourceFilesystem) (uint6
 	syncer.Delete = c.Cfg.GetBool("cleanDestinationDir")
 
 	if syncer.Delete {
-		c.Logger.INFO.Println("removing all files from destination that don't exist in static dirs")
+		c.logger.INFO.Println("removing all files from destination that don't exist in static dirs")
 
 		syncer.DeleteFilter = func(f os.FileInfo) bool {
 			return f.IsDir() && strings.HasPrefix(f.Name(), ".")
 		}
 	}
-	c.Logger.INFO.Println("syncing static files to", publishDir)
-
-	var err error
+	c.logger.INFO.Println("syncing static files to", publishDir)
 
 	// because we are using a baseFs (to get the union right).
 	// set sync src to root
-	err = syncer.Sync(publishDir, helpers.FilePathSeparator)
+	err := syncer.Sync(publishDir, helpers.FilePathSeparator)
 	if err != nil {
 		return 0, err
 	}
@@ -480,7 +647,7 @@ func (c *commandeer) timeTrack(start time.Time, name string) {
 		return
 	}
 	elapsed := time.Since(start)
-	c.Logger.FEEDBACK.Printf("%s in %v ms", name, int(1000*elapsed.Seconds()))
+	c.logger.FEEDBACK.Printf("%s in %v ms", name, int(1000*elapsed.Seconds()))
 }
 
 // getDirList provides NewWatcher() with a list of directories to watch for changes.
@@ -498,7 +665,7 @@ func (c *commandeer) getDirList() ([]string, error) {
 					return nil
 				}
 
-				c.Logger.ERROR.Println("Walker: ", err)
+				c.logger.ERROR.Println("Walker: ", err)
 				return nil
 			}
 
@@ -511,16 +678,16 @@ func (c *commandeer) getDirList() ([]string, error) {
 			if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
 				link, err := filepath.EvalSymlinks(path)
 				if err != nil {
-					c.Logger.ERROR.Printf("Cannot read symbolic link '%s', error was: %s", path, err)
+					c.logger.ERROR.Printf("Cannot read symbolic link '%s', error was: %s", path, err)
 					return nil
 				}
 				linkfi, err := helpers.LstatIfPossible(c.Fs.Source, link)
 				if err != nil {
-					c.Logger.ERROR.Printf("Cannot stat %q: %s", link, err)
+					c.logger.ERROR.Printf("Cannot stat %q: %s", link, err)
 					return nil
 				}
 				if !allowSymbolicDirs && !linkfi.Mode().IsRegular() {
-					c.Logger.ERROR.Printf("Symbolic links for directories not supported, skipping %q", path)
+					c.logger.ERROR.Printf("Symbolic links for directories not supported, skipping %q", path)
 					return nil
 				}
 
@@ -601,23 +768,26 @@ func (c *commandeer) getDirList() ([]string, error) {
 	return a, nil
 }
 
-func (c *commandeer) resetAndBuildSites() (err error) {
-	if !c.h.quiet {
-		c.Logger.FEEDBACK.Println("Started building sites ...")
-	}
-	return c.hugo.Build(hugolib.BuildCfg{ResetState: true})
-}
-
 func (c *commandeer) buildSites() (err error) {
 	return c.hugo.Build(hugolib.BuildCfg{})
+}
+
+func (c *commandeer) handleBuildErr(err error, msg string) {
+	c.buildErr = err
+
+	c.logger.ERROR.Print(msg + ":\n\n")
+	c.logger.ERROR.Println(helpers.FirstUpper(err.Error()))
+	if !c.h.quiet && c.h.verbose {
+		herrors.PrintStackTrace(err)
+	}
 }
 
 func (c *commandeer) rebuildSites(events []fsnotify.Event) error {
 	defer c.timeTrack(time.Now(), "Total")
 
+	c.buildErr = nil
 	visited := c.visitedURLs.PeekAllSet()
-	doLiveReload := !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload")
-	if doLiveReload && !c.Cfg.GetBool("disableFastRender") {
+	if c.fastRenderMode {
 
 		// Make sure we always render the home pages
 		for _, l := range c.languages {
@@ -625,7 +795,7 @@ func (c *commandeer) rebuildSites(events []fsnotify.Event) error {
 			if langPath != "" {
 				langPath = langPath + "/"
 			}
-			home := c.hugo.PathSpec.PrependBasePath("/" + langPath)
+			home := c.hugo.PathSpec.PrependBasePath("/"+langPath, false)
 			visited[home] = true
 		}
 
@@ -633,20 +803,31 @@ func (c *commandeer) rebuildSites(events []fsnotify.Event) error {
 	return c.hugo.Build(hugolib.BuildCfg{RecentlyVisited: visited}, events...)
 }
 
+func (c *commandeer) partialReRender(urls ...string) error {
+	c.buildErr = nil
+	visited := make(map[string]bool)
+	for _, url := range urls {
+		visited[url] = true
+	}
+	return c.hugo.Build(hugolib.BuildCfg{RecentlyVisited: visited, PartialReRender: true})
+}
+
 func (c *commandeer) fullRebuild() {
 	c.commandeerHugoState = &commandeerHugoState{}
 	err := c.loadConfig(true, true)
 	if err != nil {
-		jww.ERROR.Println("Failed to reload config:", err)
 		// Set the processing on pause until the state is recovered.
 		c.paused = true
+		c.handleBuildErr(err, "Failed to reload config")
+
 	} else {
 		c.paused = false
 	}
 
 	if !c.paused {
-		if err := c.buildSites(); err != nil {
-			jww.ERROR.Println(err)
+		err := c.buildSites()
+		if err != nil {
+			c.logger.ERROR.Println(err)
 		} else if !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload") {
 			livereload.ForceRefresh()
 		}
@@ -679,8 +860,8 @@ func (c *commandeer) newWatcher(dirList ...string) (*watcher.Batcher, error) {
 	// Identifies changes to config (config.toml) files.
 	configSet := make(map[string]bool)
 
+	c.logger.FEEDBACK.Println("Watching for config changes in", strings.Join(c.configFiles, ", "))
 	for _, configFile := range c.configFiles {
-		c.Logger.FEEDBACK.Println("Watching for config changes in", configFile)
 		watcher.Add(configFile)
 		configSet[configFile] = true
 	}
@@ -689,241 +870,267 @@ func (c *commandeer) newWatcher(dirList ...string) (*watcher.Batcher, error) {
 		for {
 			select {
 			case evs := <-watcher.Events:
-				for _, ev := range evs {
-					if configSet[ev.Name] {
-						if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
-							continue
-						}
-						if ev.Op&fsnotify.Remove == fsnotify.Remove {
-							for _, configFile := range c.configFiles {
-								counter := 0
-								for watcher.Add(configFile) != nil {
-									counter++
-									if counter >= 100 {
-										break
-									}
-									time.Sleep(100 * time.Millisecond)
-								}
-							}
-						}
-						// Config file changed. Need full rebuild.
-						c.fullRebuild()
-						break
-					}
-				}
-
-				if c.paused {
-					// Wait for the server to get into a consistent state before
-					// we continue with processing.
-					continue
-				}
-
-				if len(evs) > 50 {
-					// This is probably a mass edit of the content dir.
-					// Schedule a full rebuild for when it slows down.
-					c.debounce(c.fullRebuild)
-					continue
-				}
-
-				c.Logger.INFO.Println("Received System Events:", evs)
-
-				staticEvents := []fsnotify.Event{}
-				dynamicEvents := []fsnotify.Event{}
-
-				// Special handling for symbolic links inside /content.
-				filtered := []fsnotify.Event{}
-				for _, ev := range evs {
-					// Check the most specific first, i.e. files.
-					contentMapped := c.hugo.ContentChanges.GetSymbolicLinkMappings(ev.Name)
-					if len(contentMapped) > 0 {
-						for _, mapped := range contentMapped {
-							filtered = append(filtered, fsnotify.Event{Name: mapped, Op: ev.Op})
-						}
-						continue
-					}
-
-					// Check for any symbolic directory mapping.
-
-					dir, name := filepath.Split(ev.Name)
-
-					contentMapped = c.hugo.ContentChanges.GetSymbolicLinkMappings(dir)
-
-					if len(contentMapped) == 0 {
-						filtered = append(filtered, ev)
-						continue
-					}
-
-					for _, mapped := range contentMapped {
-						mappedFilename := filepath.Join(mapped, name)
-						filtered = append(filtered, fsnotify.Event{Name: mappedFilename, Op: ev.Op})
-					}
-				}
-
-				evs = filtered
-
-				for _, ev := range evs {
-					ext := filepath.Ext(ev.Name)
-					baseName := filepath.Base(ev.Name)
-					istemp := strings.HasSuffix(ext, "~") ||
-						(ext == ".swp") || // vim
-						(ext == ".swx") || // vim
-						(ext == ".tmp") || // generic temp file
-						(ext == ".DS_Store") || // OSX Thumbnail
-						baseName == "4913" || // vim
-						strings.HasPrefix(ext, ".goutputstream") || // gnome
-						strings.HasSuffix(ext, "jb_old___") || // intelliJ
-						strings.HasSuffix(ext, "jb_tmp___") || // intelliJ
-						strings.HasSuffix(ext, "jb_bak___") || // intelliJ
-						strings.HasPrefix(ext, ".sb-") || // byword
-						strings.HasPrefix(baseName, ".#") || // emacs
-						strings.HasPrefix(baseName, "#") // emacs
-					if istemp {
-						continue
-					}
-					// Sometimes during rm -rf operations a '"": REMOVE' is triggered. Just ignore these
-					if ev.Name == "" {
-						continue
-					}
-
-					// Write and rename operations are often followed by CHMOD.
-					// There may be valid use cases for rebuilding the site on CHMOD,
-					// but that will require more complex logic than this simple conditional.
-					// On OS X this seems to be related to Spotlight, see:
-					// https://github.com/go-fsnotify/fsnotify/issues/15
-					// A workaround is to put your site(s) on the Spotlight exception list,
-					// but that may be a little mysterious for most end users.
-					// So, for now, we skip reload on CHMOD.
-					// We do have to check for WRITE though. On slower laptops a Chmod
-					// could be aggregated with other important events, and we still want
-					// to rebuild on those
-					if ev.Op&(fsnotify.Chmod|fsnotify.Write|fsnotify.Create) == fsnotify.Chmod {
-						continue
-					}
-
-					walkAdder := func(path string, f os.FileInfo, err error) error {
-						if f.IsDir() {
-							c.Logger.FEEDBACK.Println("adding created directory to watchlist", path)
-							if err := watcher.Add(path); err != nil {
-								return err
-							}
-						} else if !staticSyncer.isStatic(path) {
-							// Hugo's rebuilding logic is entirely file based. When you drop a new folder into
-							// /content on OSX, the above logic will handle future watching of those files,
-							// but the initial CREATE is lost.
-							dynamicEvents = append(dynamicEvents, fsnotify.Event{Name: path, Op: fsnotify.Create})
-						}
-						return nil
-					}
-
-					// recursively add new directories to watch list
-					// When mkdir -p is used, only the top directory triggers an event (at least on OSX)
-					if ev.Op&fsnotify.Create == fsnotify.Create {
-						if s, err := c.Fs.Source.Stat(ev.Name); err == nil && s.Mode().IsDir() {
-							_ = helpers.SymbolicWalk(c.Fs.Source, ev.Name, walkAdder)
-						}
-					}
-
-					if staticSyncer.isStatic(ev.Name) {
-						staticEvents = append(staticEvents, ev)
-					} else {
-						dynamicEvents = append(dynamicEvents, ev)
-					}
-				}
-
-				if len(staticEvents) > 0 {
-					c.Logger.FEEDBACK.Println("\nStatic file changes detected")
-					const layout = "2006-01-02 15:04:05.000 -0700"
-					c.Logger.FEEDBACK.Println(time.Now().Format(layout))
-
-					if c.Cfg.GetBool("forceSyncStatic") {
-						c.Logger.FEEDBACK.Printf("Syncing all static files\n")
-						_, err := c.copyStatic()
-						if err != nil {
-							stopOnErr(c.Logger, err, "Error copying static files to publish dir")
-						}
-					} else {
-						if err := staticSyncer.syncsStaticEvents(staticEvents); err != nil {
-							c.Logger.ERROR.Println(err)
-							continue
-						}
-					}
-
-					if !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload") {
-						// Will block forever trying to write to a channel that nobody is reading if livereload isn't initialized
-
-						// force refresh when more than one file
-						if len(staticEvents) == 1 {
-							ev := staticEvents[0]
-							path := c.hugo.BaseFs.SourceFilesystems.MakeStaticPathRelative(ev.Name)
-							path = c.firstPathSpec().RelURL(helpers.ToSlashTrimLeading(path), false)
-							livereload.RefreshPath(path)
-						} else {
-							livereload.ForceRefresh()
-						}
-					}
-				}
-
-				if len(dynamicEvents) > 0 {
-					partitionedEvents := partitionDynamicEvents(
-						c.firstPathSpec().BaseFs.SourceFilesystems,
-						dynamicEvents)
-
-					doLiveReload := !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload")
-					onePageName := pickOneWriteOrCreatePath(partitionedEvents.ContentEvents)
-
-					c.Logger.FEEDBACK.Println("\nChange detected, rebuilding site")
-					const layout = "2006-01-02 15:04:05.000 -0700"
-					c.Logger.FEEDBACK.Println(time.Now().Format(layout))
-
-					c.changeDetector.PrepareNew()
-					if err := c.rebuildSites(dynamicEvents); err != nil {
-						c.Logger.ERROR.Println("Failed to rebuild site:", err)
-					}
-
-					if doLiveReload {
-						if len(partitionedEvents.ContentEvents) == 0 && len(partitionedEvents.AssetEvents) > 0 {
-							changed := c.changeDetector.changed()
-							if c.changeDetector != nil && len(changed) == 0 {
-								// Nothing has changed.
-								continue
-							} else if len(changed) == 1 {
-								pathToRefresh := c.firstPathSpec().RelURL(helpers.ToSlashTrimLeading(changed[0]), false)
-								livereload.RefreshPath(pathToRefresh)
-							} else {
-								livereload.ForceRefresh()
-							}
-						}
-
-						if len(partitionedEvents.ContentEvents) > 0 {
-
-							navigate := c.Cfg.GetBool("navigateToChanged")
-							// We have fetched the same page above, but it may have
-							// changed.
-							var p *hugolib.Page
-
-							if navigate {
-								if onePageName != "" {
-									p = c.hugo.GetContentPage(onePageName)
-								}
-							}
-
-							if p != nil {
-								livereload.NavigateToPathForPort(p.RelPermalink(), p.Site.ServerPort())
-							} else {
-								livereload.ForceRefresh()
-							}
-						}
-					}
+				c.handleEvents(watcher, staticSyncer, evs, configSet)
+				if c.showErrorInBrowser && c.errCount() > 0 {
+					// Need to reload browser to show the error
+					livereload.ForceRefresh()
 				}
 			case err := <-watcher.Errors:
 				if err != nil {
-					c.Logger.ERROR.Println(err)
+					c.logger.ERROR.Println("Error while watching:", err)
 				}
 			}
 		}
 	}()
 
 	return watcher, nil
+}
+
+func (c *commandeer) handleEvents(watcher *watcher.Batcher,
+	staticSyncer *staticSyncer,
+	evs []fsnotify.Event,
+	configSet map[string]bool) {
+
+	for _, ev := range evs {
+		isConfig := configSet[ev.Name]
+		if !isConfig {
+			// It may be one of the /config folders
+			dirname := filepath.Dir(ev.Name)
+			if dirname != "." && configSet[dirname] {
+				isConfig = true
+			}
+
+		}
+
+		if isConfig {
+			if ev.Op&fsnotify.Chmod == fsnotify.Chmod {
+				continue
+			}
+			if ev.Op&fsnotify.Remove == fsnotify.Remove || ev.Op&fsnotify.Rename == fsnotify.Rename {
+				for _, configFile := range c.configFiles {
+					counter := 0
+					for watcher.Add(configFile) != nil {
+						counter++
+						if counter >= 100 {
+							break
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+				}
+			}
+			// Config file(s) changed. Need full rebuild.
+			c.fullRebuild()
+			break
+		}
+	}
+
+	if c.paused {
+		// Wait for the server to get into a consistent state before
+		// we continue with processing.
+		return
+	}
+
+	if len(evs) > 50 {
+		// This is probably a mass edit of the content dir.
+		// Schedule a full rebuild for when it slows down.
+		c.debounce(c.fullRebuild)
+		return
+	}
+
+	c.logger.INFO.Println("Received System Events:", evs)
+
+	staticEvents := []fsnotify.Event{}
+	dynamicEvents := []fsnotify.Event{}
+
+	// Special handling for symbolic links inside /content.
+	filtered := []fsnotify.Event{}
+	for _, ev := range evs {
+		// Check the most specific first, i.e. files.
+		contentMapped := c.hugo.ContentChanges.GetSymbolicLinkMappings(ev.Name)
+		if len(contentMapped) > 0 {
+			for _, mapped := range contentMapped {
+				filtered = append(filtered, fsnotify.Event{Name: mapped, Op: ev.Op})
+			}
+			continue
+		}
+
+		// Check for any symbolic directory mapping.
+
+		dir, name := filepath.Split(ev.Name)
+
+		contentMapped = c.hugo.ContentChanges.GetSymbolicLinkMappings(dir)
+
+		if len(contentMapped) == 0 {
+			filtered = append(filtered, ev)
+			continue
+		}
+
+		for _, mapped := range contentMapped {
+			mappedFilename := filepath.Join(mapped, name)
+			filtered = append(filtered, fsnotify.Event{Name: mappedFilename, Op: ev.Op})
+		}
+	}
+
+	evs = filtered
+
+	for _, ev := range evs {
+		ext := filepath.Ext(ev.Name)
+		baseName := filepath.Base(ev.Name)
+		istemp := strings.HasSuffix(ext, "~") ||
+			(ext == ".swp") || // vim
+			(ext == ".swx") || // vim
+			(ext == ".tmp") || // generic temp file
+			(ext == ".DS_Store") || // OSX Thumbnail
+			baseName == "4913" || // vim
+			strings.HasPrefix(ext, ".goutputstream") || // gnome
+			strings.HasSuffix(ext, "jb_old___") || // intelliJ
+			strings.HasSuffix(ext, "jb_tmp___") || // intelliJ
+			strings.HasSuffix(ext, "jb_bak___") || // intelliJ
+			strings.HasPrefix(ext, ".sb-") || // byword
+			strings.HasPrefix(baseName, ".#") || // emacs
+			strings.HasPrefix(baseName, "#") // emacs
+		if istemp {
+			continue
+		}
+		if c.hugo.Deps.SourceSpec.IgnoreFile(ev.Name) {
+			continue
+		}
+		// Sometimes during rm -rf operations a '"": REMOVE' is triggered. Just ignore these
+		if ev.Name == "" {
+			continue
+		}
+
+		// Write and rename operations are often followed by CHMOD.
+		// There may be valid use cases for rebuilding the site on CHMOD,
+		// but that will require more complex logic than this simple conditional.
+		// On OS X this seems to be related to Spotlight, see:
+		// https://github.com/go-fsnotify/fsnotify/issues/15
+		// A workaround is to put your site(s) on the Spotlight exception list,
+		// but that may be a little mysterious for most end users.
+		// So, for now, we skip reload on CHMOD.
+		// We do have to check for WRITE though. On slower laptops a Chmod
+		// could be aggregated with other important events, and we still want
+		// to rebuild on those
+		if ev.Op&(fsnotify.Chmod|fsnotify.Write|fsnotify.Create) == fsnotify.Chmod {
+			continue
+		}
+
+		walkAdder := func(path string, f os.FileInfo, err error) error {
+			if f.IsDir() {
+				c.logger.FEEDBACK.Println("adding created directory to watchlist", path)
+				if err := watcher.Add(path); err != nil {
+					return err
+				}
+			} else if !staticSyncer.isStatic(path) {
+				// Hugo's rebuilding logic is entirely file based. When you drop a new folder into
+				// /content on OSX, the above logic will handle future watching of those files,
+				// but the initial CREATE is lost.
+				dynamicEvents = append(dynamicEvents, fsnotify.Event{Name: path, Op: fsnotify.Create})
+			}
+			return nil
+		}
+
+		// recursively add new directories to watch list
+		// When mkdir -p is used, only the top directory triggers an event (at least on OSX)
+		if ev.Op&fsnotify.Create == fsnotify.Create {
+			if s, err := c.Fs.Source.Stat(ev.Name); err == nil && s.Mode().IsDir() {
+				_ = helpers.SymbolicWalk(c.Fs.Source, ev.Name, walkAdder)
+			}
+		}
+
+		if staticSyncer.isStatic(ev.Name) {
+			staticEvents = append(staticEvents, ev)
+		} else {
+			dynamicEvents = append(dynamicEvents, ev)
+		}
+	}
+
+	if len(staticEvents) > 0 {
+		c.logger.FEEDBACK.Println("\nStatic file changes detected")
+		const layout = "2006-01-02 15:04:05.000 -0700"
+		c.logger.FEEDBACK.Println(time.Now().Format(layout))
+
+		if c.Cfg.GetBool("forceSyncStatic") {
+			c.logger.FEEDBACK.Printf("Syncing all static files\n")
+			_, err := c.copyStatic()
+			if err != nil {
+				c.logger.ERROR.Println("Error copying static files to publish dir:", err)
+				return
+			}
+		} else {
+			if err := staticSyncer.syncsStaticEvents(staticEvents); err != nil {
+				c.logger.ERROR.Println("Error syncing static files to publish dir:", err)
+				return
+			}
+		}
+
+		if !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload") {
+			// Will block forever trying to write to a channel that nobody is reading if livereload isn't initialized
+
+			// force refresh when more than one file
+			if len(staticEvents) == 1 {
+				ev := staticEvents[0]
+				path := c.hugo.BaseFs.SourceFilesystems.MakeStaticPathRelative(ev.Name)
+				path = c.firstPathSpec().RelURL(helpers.ToSlashTrimLeading(path), false)
+				livereload.RefreshPath(path)
+			} else {
+				livereload.ForceRefresh()
+			}
+		}
+	}
+
+	if len(dynamicEvents) > 0 {
+		partitionedEvents := partitionDynamicEvents(
+			c.firstPathSpec().BaseFs.SourceFilesystems,
+			dynamicEvents)
+
+		doLiveReload := !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload")
+		onePageName := pickOneWriteOrCreatePath(partitionedEvents.ContentEvents)
+
+		c.logger.FEEDBACK.Println("\nChange detected, rebuilding site")
+		const layout = "2006-01-02 15:04:05.000 -0700"
+		c.logger.FEEDBACK.Println(time.Now().Format(layout))
+
+		c.changeDetector.PrepareNew()
+		if err := c.rebuildSites(dynamicEvents); err != nil {
+			c.handleBuildErr(err, "Rebuild failed")
+		}
+
+		if doLiveReload {
+			if len(partitionedEvents.ContentEvents) == 0 && len(partitionedEvents.AssetEvents) > 0 {
+				changed := c.changeDetector.changed()
+				if c.changeDetector != nil && len(changed) == 0 {
+					// Nothing has changed.
+					return
+				} else if len(changed) == 1 {
+					pathToRefresh := c.firstPathSpec().RelURL(helpers.ToSlashTrimLeading(changed[0]), false)
+					livereload.RefreshPath(pathToRefresh)
+				} else {
+					livereload.ForceRefresh()
+				}
+			}
+
+			if len(partitionedEvents.ContentEvents) > 0 {
+
+				navigate := c.Cfg.GetBool("navigateToChanged")
+				// We have fetched the same page above, but it may have
+				// changed.
+				var p page.Page
+
+				if navigate {
+					if onePageName != "" {
+						p = c.hugo.GetContentPage(onePageName)
+					}
+				}
+
+				if p != nil {
+					livereload.NavigateToPathForPort(p.RelPermalink(), p.Site().ServerPort())
+				} else {
+					livereload.ForceRefresh()
+				}
+			}
+		}
+	}
 }
 
 // dynamicEvents contains events that is considered dynamic, as in "not static".
@@ -979,15 +1186,17 @@ func (c *commandeer) isThemeVsHugoVersionMismatch(fs afero.Fs) (dir string, mism
 		}
 
 		b, err := afero.ReadFile(fs, path)
+		if err != nil {
+			continue
+		}
 
-		tomlMeta, err := parser.HandleTOMLMetaData(b)
-
+		tomlMeta, err := metadecoders.Default.UnmarshalToMap(b, metadecoders.TOML)
 		if err != nil {
 			continue
 		}
 
 		if minVersion, ok := tomlMeta["min_version"]; ok {
-			if helpers.CompareVersion(minVersion) > 0 {
+			if hugo.CompareVersion(minVersion) > 0 {
 				return absThemeDir, true, fmt.Sprint(minVersion)
 			}
 		}

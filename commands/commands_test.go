@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gohugoio/hugo/common/types"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -30,7 +32,7 @@ func TestExecute(t *testing.T) {
 
 	assert := require.New(t)
 
-	dir, err := createSimpleTestSite(t)
+	dir, err := createSimpleTestSite(t, testSiteConfig{})
 	assert.NoError(err)
 
 	defer func() {
@@ -41,7 +43,7 @@ func TestExecute(t *testing.T) {
 	assert.NoError(resp.Err)
 	result := resp.Result
 	assert.True(len(result.Sites) == 1)
-	assert.True(len(result.Sites[0].RegularPages) == 1)
+	assert.True(len(result.Sites[0].RegularPages()) == 1)
 }
 
 func TestCommandsPersistentFlags(t *testing.T) {
@@ -56,8 +58,11 @@ func TestCommandsPersistentFlags(t *testing.T) {
 		check func(command []cmder)
 	}{{[]string{"server",
 		"--config=myconfig.toml",
+		"--configDir=myconfigdir",
 		"--contentDir=mycontent",
 		"--disableKinds=page,home",
+		"--environment=testing",
+		"--configDir=myconfigdir",
 		"--layoutDir=mylayouts",
 		"--theme=mytheme",
 		"--gc",
@@ -72,12 +77,14 @@ func TestCommandsPersistentFlags(t *testing.T) {
 		"--port=1366",
 		"--renderToDisk",
 		"--source=mysource",
+		"--path-warnings",
 	}, func(commands []cmder) {
 		var sc *serverCmd
 		for _, command := range commands {
 			if b, ok := command.(commandsBuilderGetter); ok {
-				v := b.getCmmandsBuilder().hugoBuilderCommon
+				v := b.getCommandsBuilder().hugoBuilderCommon
 				assert.Equal("myconfig.toml", v.cfgFile)
+				assert.Equal("myconfigdir", v.cfgDir)
 				assert.Equal("mysource", v.source)
 				assert.Equal("https://example.com/b/", v.baseURL)
 			}
@@ -93,19 +100,23 @@ func TestCommandsPersistentFlags(t *testing.T) {
 		assert.True(sc.noHTTPCache)
 		assert.True(sc.renderToDisk)
 		assert.Equal(1366, sc.serverPort)
+		assert.Equal("testing", sc.environment)
 
 		cfg := viper.New()
 		sc.flagsToConfig(cfg)
 		assert.Equal("/tmp/mydestination", cfg.GetString("publishDir"))
 		assert.Equal("mycontent", cfg.GetString("contentDir"))
 		assert.Equal("mylayouts", cfg.GetString("layoutDir"))
-		assert.Equal("mytheme", cfg.GetString("theme"))
+		assert.Equal([]string{"mytheme"}, cfg.GetStringSlice("theme"))
 		assert.Equal("mythemes", cfg.GetString("themesDir"))
 		assert.Equal("https://example.com/b/", cfg.GetString("baseURL"))
 
 		assert.Equal([]string{"page", "home"}, cfg.Get("disableKinds"))
 
 		assert.True(cfg.GetBool("gc"))
+
+		// The flag is named path-warnings
+		assert.True(cfg.GetBool("logPathWarnings"))
 
 		// The flag is named i18n-warnings
 		assert.True(cfg.GetBool("logI18nWarnings"))
@@ -135,7 +146,7 @@ func TestCommandsExecute(t *testing.T) {
 
 	assert := require.New(t)
 
-	dir, err := createSimpleTestSite(t)
+	dir, err := createSimpleTestSite(t, testSiteConfig{})
 	assert.NoError(err)
 
 	dirOut, err := ioutil.TempDir("", "hugo-cli-out")
@@ -160,7 +171,6 @@ func TestCommandsExecute(t *testing.T) {
 		{nil, []string{sourceFlag}, ""},
 		{nil, []string{sourceFlag, "--renderToMemory"}, ""},
 		{[]string{"config"}, []string{sourceFlag}, ""},
-		{[]string{"benchmark"}, []string{sourceFlag, "-n=1"}, ""},
 		{[]string{"convert", "toTOML"}, []string{sourceFlag, "-o=" + filepath.Join(dirOut, "toml")}, ""},
 		{[]string{"convert", "toYAML"}, []string{sourceFlag, "-o=" + filepath.Join(dirOut, "yaml")}, ""},
 		{[]string{"convert", "toJSON"}, []string{sourceFlag, "-o=" + filepath.Join(dirOut, "json")}, ""},
@@ -179,8 +189,8 @@ func TestCommandsExecute(t *testing.T) {
 	}
 
 	for _, test := range tests {
-
-		hugoCmd := newCommandsBuilder().addAll().build().getCommand()
+		b := newCommandsBuilder().addAll().build()
+		hugoCmd := b.getCommand()
 		test.flags = append(test.flags, "--quiet")
 		hugoCmd.SetArgs(append(test.commands, test.flags...))
 
@@ -196,25 +206,48 @@ func TestCommandsExecute(t *testing.T) {
 			assert.NoError(err, fmt.Sprintf("%v", test.commands))
 		}
 
+		// Assert that we have not left any development debug artifacts in
+		// the code.
+		if b.c != nil {
+			_, ok := b.c.destinationFs.(types.DevMarker)
+			assert.False(ok)
+		}
+
 	}
 
 }
 
-func createSimpleTestSite(t *testing.T) (string, error) {
+type testSiteConfig struct {
+	configTOML string
+	contentDir string
+}
+
+func createSimpleTestSite(t *testing.T, cfg testSiteConfig) (string, error) {
 	d, e := ioutil.TempDir("", "hugo-cli")
 	if e != nil {
 		return "", e
 	}
 
-	// Just the basic. These are for CLI tests, not site testing.
-	writeFile(t, filepath.Join(d, "config.toml"), `
+	cfgStr := `
 
 baseURL = "https://example.org"
 title = "Hugo Commands"
 
-`)
+`
 
-	writeFile(t, filepath.Join(d, "content", "p1.md"), `
+	contentDir := "content"
+
+	if cfg.configTOML != "" {
+		cfgStr = cfg.configTOML
+	}
+	if cfg.contentDir != "" {
+		contentDir = cfg.contentDir
+	}
+
+	// Just the basic. These are for CLI tests, not site testing.
+	writeFile(t, filepath.Join(d, "config.toml"), cfgStr)
+
+	writeFile(t, filepath.Join(d, contentDir, "p1.md"), `
 ---
 title: "P1"
 weight: 1
@@ -233,6 +266,7 @@ Single: {{ .Title }}
 	writeFile(t, filepath.Join(d, "layouts", "_default", "list.html"), `
 
 List: {{ .Title }}
+Environment: {{ hugo.Environment }}
 
 `)
 

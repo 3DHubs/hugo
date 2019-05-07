@@ -1,7 +1,7 @@
 ---
 title: Local File Templates
 linktitle: Local File Templates
-description: Hugo's `readerDir` and `readFile` functions make it easy to traverse your project's directory structure and write file contents to your templates.
+description: Hugo's `readDir` and `readFile` functions make it easy to traverse your project's directory structure and write file contents to your templates.
 godocref: https://golang.org/pkg/os/#FileInfo
 date: 2017-02-01
 publishdate: 2017-02-01
@@ -48,7 +48,7 @@ You can then call the shortcode as follows inside of your content's markup:
 
 The above shortcode [is part of the code for the Hugo docs][dirindex]. Here it lists this site's CSS files:
 
-{{< directoryindex path="/themes/gohugoioTheme/static/dist" pathURL="/css" >}}
+{{< directoryindex path="/themes/gohugoioTheme/static" pathURL="/css" >}}
 
 {{% note "Slashes are Important" %}}
 The initial slash `/` in `pathURL` is important in the `directoryindex` shortcode. Otherwise, `pathURL` becomes relative to the current web page.

@@ -16,7 +16,6 @@
 package releaser
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -26,7 +25,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/common/hugo"
+	"github.com/pkg/errors"
 )
 
 const commitPrefix = "releaser:"
@@ -51,8 +51,8 @@ type ReleaseHandler struct {
 	git func(args ...string) (string, error)
 }
 
-func (r ReleaseHandler) calculateVersions() (helpers.HugoVersion, helpers.HugoVersion) {
-	newVersion := helpers.MustParseHugoVersion(r.cliVersion)
+func (r ReleaseHandler) calculateVersions() (hugo.Version, hugo.Version) {
+	newVersion := hugo.MustParseVersion(r.cliVersion)
 	finalVersion := newVersion.Next()
 	finalVersion.PatchLevel = 0
 
@@ -102,7 +102,7 @@ func (r *ReleaseHandler) Run() error {
 	}
 
 	if exists {
-		return fmt.Errorf("Tag %q already exists", tag)
+		return fmt.Errorf("tag %q already exists", tag)
 	}
 
 	var changeLogFromTag string
@@ -255,19 +255,19 @@ func (r *ReleaseHandler) release(releaseNotesFile string) error {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("goreleaser failed: %s", err)
+		return errors.Wrap(err, "goreleaser failed")
 	}
 	return nil
 }
 
-func (r *ReleaseHandler) bumpVersions(ver helpers.HugoVersion) error {
+func (r *ReleaseHandler) bumpVersions(ver hugo.Version) error {
 	toDev := ""
 
 	if ver.Suffix != "" {
 		toDev = ver.Suffix
 	}
 
-	if err := r.replaceInFile("helpers/hugo.go",
+	if err := r.replaceInFile("common/hugo/version_current.go",
 		`Number:(\s{4,})(.*),`, fmt.Sprintf(`Number:${1}%.2f,`, ver.Number),
 		`PatchLevel:(\s*)(.*),`, fmt.Sprintf(`PatchLevel:${1}%d,`, ver.PatchLevel),
 		`Suffix:(\s{4,})".*",`, fmt.Sprintf(`Suffix:${1}"%s",`, toDev)); err != nil {
@@ -295,12 +295,6 @@ func (r *ReleaseHandler) bumpVersions(ver helpers.HugoVersion) error {
 
 	if err := r.replaceInFile("commands/new.go",
 		`min_version = "(.*)"`, fmt.Sprintf(`min_version = "%s"`, minVersion)); err != nil {
-		return err
-	}
-
-	// docs/config.toml
-	if err := r.replaceInFile("docs/config.toml",
-		`release = "(.*)"`, fmt.Sprintf(`release = "%s"`, ver)); err != nil {
 		return err
 	}
 

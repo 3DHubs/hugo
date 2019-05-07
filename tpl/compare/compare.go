@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package compare provides template functions for comparing values.
 package compare
 
 import (
@@ -18,6 +19,8 @@ import (
 	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/gohugoio/hugo/common/types"
 
 	"github.com/gohugoio/hugo/compare"
 )
@@ -87,7 +90,6 @@ func (*Namespace) Default(dflt interface{}, given ...interface{}) (interface{}, 
 
 // Eq returns the boolean truth of arg1 == arg2.
 func (*Namespace) Eq(x, y interface{}) bool {
-
 	if e, ok := x.(compare.Eqer); ok {
 		return e.Eq(y)
 	}
@@ -97,6 +99,9 @@ func (*Namespace) Eq(x, y interface{}) bool {
 	}
 
 	normalize := func(v interface{}) interface{} {
+		if types.IsNil(v) {
+			return nil
+		}
 		vv := reflect.ValueOf(v)
 		switch vv.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

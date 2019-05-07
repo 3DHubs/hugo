@@ -67,14 +67,14 @@ For production:
 
 ```
 [context.production.environment]
-  HUGO_VERSION = "0.36"
+  HUGO_VERSION = "0.53"
 ```
 
 For testing:
 
 ```
 [context.deploy-preview.environment]
-  HUGO_VERSION = "0.36"
+  HUGO_VERSION = "0.53"
 ```
 
 The Netlify configuration file can be a little hard to understand and get right for the different environment, and you may get some inspiration and tips from this site's `netlify.toml`:
@@ -126,6 +126,12 @@ You can checkout a specific version as follows:
 
 ```
 git checkout tags/<version-name>
+```
+
+You can update a theme to the latest version by executing the following command in the *root* directory of your project:
+
+```
+git submodule update --rebase --remote
 ```
 
 ## Next Steps

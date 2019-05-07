@@ -1,4 +1,4 @@
-// Copyright 2017 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@ package commands
 import (
 	"os"
 
+	"github.com/gohugoio/hugo/hugolib/paths"
+
+	"github.com/gohugoio/hugo/common/hugo"
+	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/spf13/cobra"
-	jww "github.com/spf13/jwalterweatherman"
-
-	"github.com/spf13/nitro"
 )
 
 type commandsBuilder struct {
@@ -46,9 +47,9 @@ func (b *commandsBuilder) addAll() *commandsBuilder {
 		newEnvCmd(),
 		newConfigCmd(),
 		newCheckCmd(),
-		b.newBenchmarkCmd(),
+		newDeployCmd(),
 		newConvertCmd(),
-		newNewCmd(),
+		b.newNewCmd(),
 		newListCmd(),
 		newImportCmd(),
 		newGenCmd(),
@@ -82,14 +83,14 @@ var _ commandsBuilderGetter = (*baseBuilderCmd)(nil)
 
 // Used in tests.
 type commandsBuilderGetter interface {
-	getCmmandsBuilder() *commandsBuilder
+	getCommandsBuilder() *commandsBuilder
 }
 type baseBuilderCmd struct {
 	*baseCmd
 	*commandsBuilder
 }
 
-func (b *baseBuilderCmd) getCmmandsBuilder() *commandsBuilder {
+func (b *baseBuilderCmd) getCommandsBuilder() *commandsBuilder {
 	return b.commandsBuilder
 }
 
@@ -162,11 +163,11 @@ Complete documentation is available at http://gohugo.io/.`,
 	})
 
 	cc.cmd.PersistentFlags().StringVar(&cc.cfgFile, "config", "", "config file (default is path/config.yaml|json|toml)")
+	cc.cmd.PersistentFlags().StringVar(&cc.cfgDir, "configDir", "config", "config dir")
 	cc.cmd.PersistentFlags().BoolVar(&cc.quiet, "quiet", false, "build in quiet mode")
 
 	// Set bash-completion
-	validConfigFilenames := []string{"json", "js", "yaml", "yml", "toml", "tml"}
-	_ = cc.cmd.PersistentFlags().SetAnnotation("config", cobra.BashCompFilenameExt, validConfigFilenames)
+	_ = cc.cmd.PersistentFlags().SetAnnotation("config", cobra.BashCompFilenameExt, config.ValidConfigFileExtensions)
 
 	cc.cmd.PersistentFlags().BoolVarP(&cc.verbose, "verbose", "v", false, "verbose output")
 	cc.cmd.PersistentFlags().BoolVarP(&cc.debug, "debug", "", false, "debug output")
@@ -177,7 +178,6 @@ Complete documentation is available at http://gohugo.io/.`,
 	cc.cmd.Flags().BoolVarP(&cc.buildWatch, "watch", "w", false, "watch filesystem for changes and recreate as needed")
 
 	cc.cmd.Flags().Bool("renderToMemory", false, "render to memory (only useful for benchmark testing)")
-	cc.cmd.Flags().Bool("minify", false, "minify any supported output format (HTML, XML etc.)")
 
 	// Set bash-completion
 	_ = cc.cmd.PersistentFlags().SetAnnotation("logFile", cobra.BashCompFilenameExt, []string{})
@@ -189,12 +189,19 @@ Complete documentation is available at http://gohugo.io/.`,
 }
 
 type hugoBuilderCommon struct {
-	source  string
-	baseURL string
+	source      string
+	baseURL     string
+	environment string
 
 	buildWatch bool
 
 	gc bool
+
+	// Profile flags (for debugging of performance problems)
+	cpuprofile   string
+	memprofile   string
+	mutexprofile string
+	traceprofile string
 
 	// TODO(bep) var vs string
 	logging    bool
@@ -204,7 +211,36 @@ type hugoBuilderCommon struct {
 	quiet      bool
 
 	cfgFile string
+	cfgDir  string
 	logFile string
+}
+
+func (cc *hugoBuilderCommon) getConfigDir(baseDir string) string {
+	if cc.cfgDir != "" {
+		return paths.AbsPathify(baseDir, cc.cfgDir)
+	}
+
+	if v, found := os.LookupEnv("HUGO_CONFIGDIR"); found {
+		return paths.AbsPathify(baseDir, v)
+	}
+
+	return paths.AbsPathify(baseDir, "config")
+}
+
+func (cc *hugoBuilderCommon) getEnvironment(isServer bool) string {
+	if cc.environment != "" {
+		return cc.environment
+	}
+
+	if v, found := os.LookupEnv("HUGO_ENVIRONMENT"); found {
+		return v
+	}
+
+	if isServer {
+		return hugo.EnvironmentDevelopment
+	}
+
+	return hugo.EnvironmentProduction
 }
 
 func (cc *hugoBuilderCommon) handleFlags(cmd *cobra.Command) {
@@ -213,26 +249,38 @@ func (cc *hugoBuilderCommon) handleFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolP("buildFuture", "F", false, "include content with publishdate in the future")
 	cmd.Flags().BoolP("buildExpired", "E", false, "include expired content")
 	cmd.Flags().StringVarP(&cc.source, "source", "s", "", "filesystem path to read files relative from")
+	cmd.Flags().StringVarP(&cc.environment, "environment", "e", "", "build environment")
 	cmd.Flags().StringP("contentDir", "c", "", "filesystem path to content directory")
 	cmd.Flags().StringP("layoutDir", "l", "", "filesystem path to layout directory")
 	cmd.Flags().StringP("cacheDir", "", "", "filesystem path to cache directory. Defaults: $TMPDIR/hugo_cache/")
 	cmd.Flags().BoolP("ignoreCache", "", false, "ignores the cache directory")
 	cmd.Flags().StringP("destination", "d", "", "filesystem path to write files to")
-	cmd.Flags().StringP("theme", "t", "", "theme to use (located in /themes/THEMENAME/)")
+	cmd.Flags().StringSliceP("theme", "t", []string{}, "themes to use (located in /themes/THEMENAME/)")
 	cmd.Flags().StringP("themesDir", "", "", "filesystem path to themes directory")
 	cmd.Flags().StringVarP(&cc.baseURL, "baseURL", "b", "", "hostname (and path) to the root, e.g. http://spf13.com/")
 	cmd.Flags().Bool("enableGitInfo", false, "add Git revision, date and author info to the pages")
 	cmd.Flags().BoolVar(&cc.gc, "gc", false, "enable to run some cleanup tasks (remove unused cache files) after the build")
 
-	cmd.Flags().BoolVar(&nitro.AnalysisOn, "stepAnalysis", false, "display memory and timing of different steps of the program")
 	cmd.Flags().Bool("templateMetrics", false, "display metrics about template executions")
 	cmd.Flags().Bool("templateMetricsHints", false, "calculate some improvement hints when combined with --templateMetrics")
 	cmd.Flags().BoolP("forceSyncStatic", "", false, "copy all files when static is changed.")
 	cmd.Flags().BoolP("noTimes", "", false, "don't sync modification time of files")
 	cmd.Flags().BoolP("noChmod", "", false, "don't sync permission mode of files")
 	cmd.Flags().BoolP("i18n-warnings", "", false, "print missing translations")
+	cmd.Flags().BoolP("path-warnings", "", false, "print warnings on duplicate target paths etc.")
+	cmd.Flags().StringVarP(&cc.cpuprofile, "profile-cpu", "", "", "write cpu profile to `file`")
+	cmd.Flags().StringVarP(&cc.memprofile, "profile-mem", "", "", "write memory profile to `file`")
+	cmd.Flags().StringVarP(&cc.mutexprofile, "profile-mutex", "", "", "write Mutex profile to `file`")
+	cmd.Flags().StringVarP(&cc.traceprofile, "trace", "", "", "write trace to `file` (not useful in general)")
+
+	// Hide these for now.
+	cmd.Flags().MarkHidden("profile-cpu")
+	cmd.Flags().MarkHidden("profile-mem")
+	cmd.Flags().MarkHidden("profile-mutex")
 
 	cmd.Flags().StringSlice("disableKinds", []string{}, "disable different kind of pages (home, RSS etc.)")
+
+	cmd.Flags().Bool("minify", false, "minify any supported output format (HTML, XML etc.)")
 
 	// Set bash-completion.
 	// Each flag must first be defined before using the SetAnnotation() call.
@@ -242,7 +290,7 @@ func (cc *hugoBuilderCommon) handleFlags(cmd *cobra.Command) {
 	_ = cmd.Flags().SetAnnotation("theme", cobra.BashCompSubdirsInDir, []string{"themes"})
 }
 
-func checkErr(logger *jww.Notepad, err error, s ...string) {
+func checkErr(logger *loggers.Logger, err error, s ...string) {
 	if err == nil {
 		return
 	}
@@ -254,26 +302,4 @@ func checkErr(logger *jww.Notepad, err error, s ...string) {
 		logger.ERROR.Println(message)
 	}
 	logger.ERROR.Println(err)
-}
-
-func stopOnErr(logger *jww.Notepad, err error, s ...string) {
-	if err == nil {
-		return
-	}
-
-	defer os.Exit(-1)
-
-	if len(s) == 0 {
-		newMessage := err.Error()
-		// Printing an empty string results in a error with
-		// no message, no bueno.
-		if newMessage != "" {
-			logger.CRITICAL.Println(newMessage)
-		}
-	}
-	for _, message := range s {
-		if message != "" {
-			logger.CRITICAL.Println(message)
-		}
-	}
 }

@@ -67,6 +67,13 @@
         ]
       },
       {
+        "Name": "Arduino",
+        "Aliases": [
+          "arduino",
+          "ino"
+        ]
+      },
+      {
         "Name": "Awk",
         "Aliases": [
           "awk",
@@ -79,6 +86,13 @@
         "Name": "BNF",
         "Aliases": [
           "bnf"
+        ]
+      },
+      {
+        "Name": "Ballerina",
+        "Aliases": [
+          "bal",
+          "ballerina"
         ]
       },
       {
@@ -206,6 +220,13 @@
         "Name": "Cap'n Proto",
         "Aliases": [
           "capnp"
+        ]
+      },
+      {
+        "Name": "Cassandra CQL",
+        "Aliases": [
+          "cassandra",
+          "cql"
         ]
       },
       {
@@ -465,6 +486,14 @@
         ]
       },
       {
+        "Name": "GraphQL",
+        "Aliases": [
+          "gql",
+          "graphql",
+          "graphqls"
+        ]
+      },
+      {
         "Name": "Groovy",
         "Aliases": [
           "gradle",
@@ -525,6 +554,7 @@
         "Aliases": [
           "cfg",
           "dosini",
+          "gitconfig",
           "inf",
           "ini"
         ]
@@ -574,6 +604,12 @@
         "Aliases": [
           "jl",
           "julia"
+        ]
+      },
+      {
+        "Name": "Jungle",
+        "Aliases": [
+          "jungle"
         ]
       },
       {
@@ -633,6 +669,13 @@
         ]
       },
       {
+        "Name": "Matlab",
+        "Aliases": [
+          "m",
+          "matlab"
+        ]
+      },
+      {
         "Name": "MiniZinc",
         "Aliases": [
           "MZN",
@@ -649,6 +692,13 @@
           "m2",
           "mod",
           "modula2"
+        ]
+      },
+      {
+        "Name": "MonkeyC",
+        "Aliases": [
+          "mc",
+          "monkeyc"
         ]
       },
       {
@@ -734,6 +784,20 @@
         "Aliases": [
           "m",
           "octave"
+        ]
+      },
+      {
+        "Name": "OpenSCAD",
+        "Aliases": [
+          "openscad",
+          "scad"
+        ]
+      },
+      {
+        "Name": "Org Mode",
+        "Aliases": [
+          "org",
+          "orgmode"
         ]
       },
       {
@@ -941,6 +1005,13 @@
         ]
       },
       {
+        "Name": "SYSTEMD",
+        "Aliases": [
+          "service",
+          "systemd"
+        ]
+      },
+      {
         "Name": "Sass",
         "Aliases": [
           "sass"
@@ -1077,10 +1148,24 @@
         ]
       },
       {
+        "Name": "TradingView",
+        "Aliases": [
+          "tradingview",
+          "tv"
+        ]
+      },
+      {
         "Name": "Transact-SQL",
         "Aliases": [
           "t-sql",
           "tsql"
+        ]
+      },
+      {
+        "Name": "Turing",
+        "Aliases": [
+          "tu",
+          "turing"
         ]
       },
       {
@@ -1122,6 +1207,15 @@
         "Name": "TypoScriptHtmlData",
         "Aliases": [
           "typoscripthtmldata"
+        ]
+      },
+      {
+        "Name": "VB.net",
+        "Aliases": [
+          "bas",
+          "vb",
+          "vb.net",
+          "vbnet"
         ]
       },
       {
@@ -1232,170 +1326,190 @@
     "types": [
       {
         "type": "application/javascript",
-        "string": "application/javascript+js",
+        "string": "application/javascript",
         "mainType": "application",
         "subType": "javascript",
-        "suffix": "js",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "js"
+        ]
       },
       {
         "type": "application/json",
-        "string": "application/json+json",
+        "string": "application/json",
         "mainType": "application",
         "subType": "json",
-        "suffix": "json",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "json"
+        ]
       },
       {
-        "type": "application/rss",
+        "type": "application/octet-stream",
+        "string": "application/octet-stream",
+        "mainType": "application",
+        "subType": "octet-stream",
+        "delimiter": "",
+        "suffixes": null
+      },
+      {
+        "type": "application/rss+xml",
         "string": "application/rss+xml",
         "mainType": "application",
         "subType": "rss",
-        "suffix": "xml",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "xml"
+        ]
+      },
+      {
+        "type": "application/toml",
+        "string": "application/toml",
+        "mainType": "application",
+        "subType": "toml",
+        "delimiter": ".",
+        "suffixes": [
+          "toml"
+        ]
       },
       {
         "type": "application/xml",
-        "string": "application/xml+xml",
+        "string": "application/xml",
         "mainType": "application",
         "subType": "xml",
-        "suffix": "xml",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "xml"
+        ]
+      },
+      {
+        "type": "application/yaml",
+        "string": "application/yaml",
+        "mainType": "application",
+        "subType": "yaml",
+        "delimiter": ".",
+        "suffixes": [
+          "yaml",
+          "yml"
+        ]
+      },
+      {
+        "type": "image/jpg",
+        "string": "image/jpg",
+        "mainType": "image",
+        "subType": "jpg",
+        "delimiter": ".",
+        "suffixes": [
+          "jpg",
+          "jpeg"
+        ]
+      },
+      {
+        "type": "image/png",
+        "string": "image/png",
+        "mainType": "image",
+        "subType": "png",
+        "delimiter": ".",
+        "suffixes": [
+          "png"
+        ]
+      },
+      {
+        "type": "image/svg+xml",
+        "string": "image/svg+xml",
+        "mainType": "image",
+        "subType": "svg",
+        "delimiter": ".",
+        "suffixes": [
+          "svg"
+        ]
       },
       {
         "type": "text/calendar",
-        "string": "text/calendar+ics",
+        "string": "text/calendar",
         "mainType": "text",
         "subType": "calendar",
-        "suffix": "ics",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "ics"
+        ]
       },
       {
         "type": "text/css",
-        "string": "text/css+css",
+        "string": "text/css",
         "mainType": "text",
         "subType": "css",
-        "suffix": "css",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "css"
+        ]
       },
       {
         "type": "text/csv",
-        "string": "text/csv+csv",
+        "string": "text/csv",
         "mainType": "text",
         "subType": "csv",
-        "suffix": "csv",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "csv"
+        ]
       },
       {
         "type": "text/html",
-        "string": "text/html+html",
+        "string": "text/html",
         "mainType": "text",
         "subType": "html",
-        "suffix": "html",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "html"
+        ]
       },
       {
         "type": "text/plain",
-        "string": "text/plain+txt",
+        "string": "text/plain",
         "mainType": "text",
         "subType": "plain",
-        "suffix": "txt",
-        "delimiter": "."
+        "delimiter": ".",
+        "suffixes": [
+          "txt"
+        ]
+      },
+      {
+        "type": "text/x-sass",
+        "string": "text/x-sass",
+        "mainType": "text",
+        "subType": "x-sass",
+        "delimiter": ".",
+        "suffixes": [
+          "sass"
+        ]
+      },
+      {
+        "type": "text/x-scss",
+        "string": "text/x-scss",
+        "mainType": "text",
+        "subType": "x-scss",
+        "delimiter": ".",
+        "suffixes": [
+          "scss"
+        ]
       }
     ]
   },
   "output": {
     "formats": [
       {
-        "MediaType": "text/html+html",
-        "name": "AMP",
-        "mediaType": {
-          "type": "text/html",
-          "string": "text/html+html",
-          "mainType": "text",
-          "subType": "html",
-          "suffix": "html",
-          "delimiter": "."
-        },
-        "path": "amp",
-        "baseName": "index",
-        "rel": "amphtml",
-        "protocol": "",
-        "isPlainText": false,
-        "isHTML": true,
-        "noUgly": false,
-        "notAlternative": false
-      },
-      {
-        "MediaType": "text/css+css",
-        "name": "CSS",
-        "mediaType": {
-          "type": "text/css",
-          "string": "text/css+css",
-          "mainType": "text",
-          "subType": "css",
-          "suffix": "css",
-          "delimiter": "."
-        },
-        "path": "",
-        "baseName": "styles",
-        "rel": "stylesheet",
-        "protocol": "",
-        "isPlainText": true,
-        "isHTML": false,
-        "noUgly": false,
-        "notAlternative": true
-      },
-      {
-        "MediaType": "text/csv+csv",
-        "name": "CSV",
-        "mediaType": {
-          "type": "text/csv",
-          "string": "text/csv+csv",
-          "mainType": "text",
-          "subType": "csv",
-          "suffix": "csv",
-          "delimiter": "."
-        },
-        "path": "",
-        "baseName": "index",
-        "rel": "alternate",
-        "protocol": "",
-        "isPlainText": true,
-        "isHTML": false,
-        "noUgly": false,
-        "notAlternative": false
-      },
-      {
-        "MediaType": "text/calendar+ics",
-        "name": "Calendar",
-        "mediaType": {
-          "type": "text/calendar",
-          "string": "text/calendar+ics",
-          "mainType": "text",
-          "subType": "calendar",
-          "suffix": "ics",
-          "delimiter": "."
-        },
-        "path": "",
-        "baseName": "index",
-        "rel": "alternate",
-        "protocol": "webcal://",
-        "isPlainText": true,
-        "isHTML": false,
-        "noUgly": false,
-        "notAlternative": false
-      },
-      {
-        "MediaType": "text/html+html",
+        "MediaType": "text/html",
         "name": "HTML",
         "mediaType": {
           "type": "text/html",
-          "string": "text/html+html",
+          "string": "text/html",
           "mainType": "text",
           "subType": "html",
-          "suffix": "html",
-          "delimiter": "."
+          "delimiter": ".",
+          "suffixes": [
+            "html"
+          ]
         },
         "path": "",
         "baseName": "index",
@@ -1404,18 +1518,70 @@
         "isPlainText": false,
         "isHTML": true,
         "noUgly": false,
-        "notAlternative": false
+        "notAlternative": false,
+        "permalinkable": true,
+        "weight": 10
       },
       {
-        "MediaType": "application/json+json",
-        "name": "JSON",
+        "MediaType": "text/html",
+        "name": "AMP",
         "mediaType": {
-          "type": "application/json",
-          "string": "application/json+json",
-          "mainType": "application",
-          "subType": "json",
-          "suffix": "json",
-          "delimiter": "."
+          "type": "text/html",
+          "string": "text/html",
+          "mainType": "text",
+          "subType": "html",
+          "delimiter": ".",
+          "suffixes": [
+            "html"
+          ]
+        },
+        "path": "amp",
+        "baseName": "index",
+        "rel": "amphtml",
+        "protocol": "",
+        "isPlainText": false,
+        "isHTML": true,
+        "noUgly": false,
+        "notAlternative": false,
+        "permalinkable": true,
+        "weight": 0
+      },
+      {
+        "MediaType": "text/css",
+        "name": "CSS",
+        "mediaType": {
+          "type": "text/css",
+          "string": "text/css",
+          "mainType": "text",
+          "subType": "css",
+          "delimiter": ".",
+          "suffixes": [
+            "css"
+          ]
+        },
+        "path": "",
+        "baseName": "styles",
+        "rel": "stylesheet",
+        "protocol": "",
+        "isPlainText": true,
+        "isHTML": false,
+        "noUgly": false,
+        "notAlternative": true,
+        "permalinkable": false,
+        "weight": 0
+      },
+      {
+        "MediaType": "text/csv",
+        "name": "CSV",
+        "mediaType": {
+          "type": "text/csv",
+          "string": "text/csv",
+          "mainType": "text",
+          "subType": "csv",
+          "delimiter": ".",
+          "suffixes": [
+            "csv"
+          ]
         },
         "path": "",
         "baseName": "index",
@@ -1424,18 +1590,70 @@
         "isPlainText": true,
         "isHTML": false,
         "noUgly": false,
-        "notAlternative": false
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
       },
       {
-        "MediaType": "text/plain+txt",
+        "MediaType": "text/calendar",
+        "name": "Calendar",
+        "mediaType": {
+          "type": "text/calendar",
+          "string": "text/calendar",
+          "mainType": "text",
+          "subType": "calendar",
+          "delimiter": ".",
+          "suffixes": [
+            "ics"
+          ]
+        },
+        "path": "",
+        "baseName": "index",
+        "rel": "alternate",
+        "protocol": "webcal://",
+        "isPlainText": true,
+        "isHTML": false,
+        "noUgly": false,
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
+      },
+      {
+        "MediaType": "application/json",
+        "name": "JSON",
+        "mediaType": {
+          "type": "application/json",
+          "string": "application/json",
+          "mainType": "application",
+          "subType": "json",
+          "delimiter": ".",
+          "suffixes": [
+            "json"
+          ]
+        },
+        "path": "",
+        "baseName": "index",
+        "rel": "alternate",
+        "protocol": "",
+        "isPlainText": true,
+        "isHTML": false,
+        "noUgly": false,
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
+      },
+      {
+        "MediaType": "text/plain",
         "name": "ROBOTS",
         "mediaType": {
           "type": "text/plain",
-          "string": "text/plain+txt",
+          "string": "text/plain",
           "mainType": "text",
           "subType": "plain",
-          "suffix": "txt",
-          "delimiter": "."
+          "delimiter": ".",
+          "suffixes": [
+            "txt"
+          ]
         },
         "path": "",
         "baseName": "robots",
@@ -1444,18 +1662,22 @@
         "isPlainText": true,
         "isHTML": false,
         "noUgly": false,
-        "notAlternative": false
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
       },
       {
         "MediaType": "application/rss+xml",
         "name": "RSS",
         "mediaType": {
-          "type": "application/rss",
+          "type": "application/rss+xml",
           "string": "application/rss+xml",
           "mainType": "application",
           "subType": "rss",
-          "suffix": "xml",
-          "delimiter": "."
+          "delimiter": ".",
+          "suffixes": [
+            "xml"
+          ]
         },
         "path": "",
         "baseName": "index",
@@ -1464,18 +1686,22 @@
         "isPlainText": false,
         "isHTML": false,
         "noUgly": true,
-        "notAlternative": false
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
       },
       {
-        "MediaType": "application/xml+xml",
+        "MediaType": "application/xml",
         "name": "Sitemap",
         "mediaType": {
           "type": "application/xml",
-          "string": "application/xml+xml",
+          "string": "application/xml",
           "mainType": "application",
           "subType": "xml",
-          "suffix": "xml",
-          "delimiter": "."
+          "delimiter": ".",
+          "suffixes": [
+            "xml"
+          ]
         },
         "path": "",
         "baseName": "sitemap",
@@ -1484,7 +1710,9 @@
         "isPlainText": false,
         "isHTML": false,
         "noUgly": true,
-        "notAlternative": false
+        "notAlternative": false,
+        "permalinkable": false,
+        "weight": 0
       }
     ],
     "layouts": [
@@ -1993,6 +2221,17 @@
         }
       },
       "compare": {
+        "And": {
+          "Description": "And computes the Boolean AND of its arguments, returning\nthe first false argument it encounters, or the last argument.",
+          "Args": [
+            "arg0",
+            "args"
+          ],
+          "Aliases": [
+            "and"
+          ],
+          "Examples": []
+        },
         "Conditional": {
           "Description": "Conditional can be used as a ternary operator.\nIt returns a if condition, else b.",
           "Args": [
@@ -2105,6 +2344,27 @@
             "ne"
           ],
           "Examples": []
+        },
+        "Not": {
+          "Description": "Not returns the Boolean negation of its argument.",
+          "Args": [
+            "arg"
+          ],
+          "Aliases": [
+            "not"
+          ],
+          "Examples": []
+        },
+        "Or": {
+          "Description": "Or computes the Boolean OR of its arguments, returning\nthe first true argument it encounters, or the last argument.",
+          "Args": [
+            "arg0",
+            "args"
+          ],
+          "Aliases": [
+            "or"
+          ],
+          "Examples": []
         }
       },
       "collections": {
@@ -2119,6 +2379,16 @@
           ],
           "Examples": []
         },
+        "Append": {
+          "Description": "Append appends the arguments up to the last one to the slice in the last argument.\nThis construct allows template constructs like this:\n    {{ $pages = $pages | append $p2 $p1 }}\nNote that with 2 arguments where both are slices of the same type,\nthe first slice will be appended to the second:\n    {{ $pages = $pages | append .Site.RegularPages }}",
+          "Args": [
+            "args"
+          ],
+          "Aliases": [
+            "append"
+          ],
+          "Examples": []
+        },
         "Apply": {
           "Description": "Apply takes a map, array, or slice and returns a new slice with the function fname applied over it.",
           "Args": [
@@ -2130,6 +2400,21 @@
             "apply"
           ],
           "Examples": []
+        },
+        "Complement": {
+          "Description": "Complement gives the elements in the last element of seqs that are not in\nany of the others.\nAll elements of seqs must be slices or arrays of comparable types.\n\nThe reasoning behind this rather clumsy API is so we can do this in the templates:\n   {{ $c := .Pages | complement $last4 }}",
+          "Args": [
+            "seqs"
+          ],
+          "Aliases": [
+            "complement"
+          ],
+          "Examples": [
+            [
+              "{{ slice \"a\" \"b\" \"c\" \"d\" \"e\" \"f\" | complement (slice \"b\" \"c\") (slice \"d\" \"e\")  }}",
+              "[a f]"
+            ]
+          ]
         },
         "Delimit": {
           "Description": "Delimit takes a given sequence and returns a delimited HTML string.\nIf last is passed to the function, it will be used as the final delimiter.",
@@ -2182,6 +2467,17 @@
           ],
           "Aliases": [
             "first"
+          ],
+          "Examples": []
+        },
+        "Group": {
+          "Description": "Group groups a set of elements by the given key.\nThis is currently only supported for Pages.",
+          "Args": [
+            "key",
+            "items"
+          ],
+          "Aliases": [
+            "group"
           ],
           "Examples": []
         },
@@ -2262,6 +2558,19 @@
           ],
           "Examples": []
         },
+        "NewScratch": {
+          "Description": "NewScratch creates a new Scratch which can be used to store values in a\nthread safe way.",
+          "Args": null,
+          "Aliases": [
+            "newScratch"
+          ],
+          "Examples": [
+            [
+              "{{ $scratch := newScratch }}{{ $scratch.Add \"b\" 2 }}{{ $scratch.Add \"b\" 2 }}{{ $scratch.Get \"b\" }}",
+              "4"
+            ]
+          ]
+        },
         "Querify": {
           "Description": "Querify encodes the given parameters in URL-encoded form (\"bar=baz\u0026foo=quux\") sorted by key.",
           "Args": [
@@ -2332,6 +2641,22 @@
           ],
           "Examples": []
         },
+        "SymDiff": {
+          "Description": "SymDiff returns the symmetric difference of s1 and s2.\nArguments must be either a slice or an array of comparable types.",
+          "Args": [
+            "s2",
+            "s1"
+          ],
+          "Aliases": [
+            "symdiff"
+          ],
+          "Examples": [
+            [
+              "{{ slice 1 2 3 | symdiff (slice 3 4) }}",
+              "[1 2 4]"
+            ]
+          ]
+        },
         "Union": {
           "Description": "Union returns the union of the given sets, l1 and l2. l1 and\nl2 must be of the same type and may be either arrays or slices.\nIf l1 and l2 aren't of the same type then l1 will be returned.\nIf either l1 or l2 is nil then the non-nil list will be returned.",
           "Args": [
@@ -2351,7 +2676,7 @@
         "Uniq": {
           "Description": "Uniq takes in a slice or array and returns a slice with subsequent\nduplicate elements removed.",
           "Args": [
-            "l"
+            "seq"
           ],
           "Aliases": [
             "uniq"
@@ -2503,7 +2828,7 @@
       },
       "fmt": {
         "Errorf": {
-          "Description": "",
+          "Description": "Errorf formats according to a format specifier and returns the string as a\nvalue that satisfies error.",
           "Args": [
             "format",
             "a"
@@ -2563,6 +2888,20 @@
               "works!\n"
             ]
           ]
+        }
+      },
+      "hugo": {
+        "Generator": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Version": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
         }
       },
       "images": {
@@ -2675,7 +3014,7 @@
           ]
         },
         "Translate": {
-          "Description": "Translate ...",
+          "Description": "Translate returns a translated string for id.",
           "Args": [
             "id",
             "args"
@@ -2838,19 +3177,6 @@
         }
       },
       "os": {
-        "Stat": {
-          "Description": "Stat returns a file infomation under the given path.",
-          "Args": [
-            "i"
-          ],
-          "Aliases": null,
-          "Examples": [
-            [
-              "{{ (os.Stat \"foo.txt\").Name }}",
-              "foo.txt"
-            ]
-          ]
-        },
         "FileExists": {
           "Description": "FileExists checks whether a file exists under the given path.",
           "Args": [
@@ -2886,7 +3212,7 @@
           ],
           "Examples": [
             [
-              "{{ range (readDir \".\") }}{{ .Name }}{{ end }}",
+              "{{ range (readDir \"files\") }}{{ .Name }}{{ end }}",
               "README.txt"
             ]
           ]
@@ -2901,15 +3227,21 @@
           ],
           "Examples": [
             [
-              "{{ readFile \"README.txt\" }}",
+              "{{ readFile \"files/README.txt\" }}",
               "Hugo Rocks!"
             ]
           ]
+        },
+        "Stat": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
         }
       },
       "partials": {
         "Include": {
-          "Description": "Include executes the named partial and returns either a string,\nwhen the partial is a text/template, or template.HTML when html/template.",
+          "Description": "Include executes the named partial.\nIf the partial contains a return statement, that value will be returned.\nElse, the rendered output will be returned:\nA string if the partial is a text/template, or template.HTML when html/template.",
           "Args": [
             "name",
             "contextList"
@@ -3001,6 +3333,102 @@
               "/my/path/|filename.txt"
             ]
           ]
+        }
+      },
+      "reflect": {
+        "IsMap": {
+          "Description": "IsMap reports whether v is a map.",
+          "Args": [
+            "v"
+          ],
+          "Aliases": null,
+          "Examples": [
+            [
+              "{{ if reflect.IsMap (dict \"a\" 1) }}Map{{ end }}",
+              "Map"
+            ]
+          ]
+        },
+        "IsSlice": {
+          "Description": "IsSlice reports whether v is a slice.",
+          "Args": [
+            "v"
+          ],
+          "Aliases": null,
+          "Examples": [
+            [
+              "{{ if reflect.IsSlice (slice 1 2 3) }}Slice{{ end }}",
+              "Slice"
+            ]
+          ]
+        }
+      },
+      "resources": {
+        "Concat": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "ExecuteAsTemplate": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Fingerprint": {
+          "Description": "Fingerprint transforms the given Resource with a MD5 hash of the content in\nthe RelPermalink and Permalink.",
+          "Args": [
+            "args"
+          ],
+          "Aliases": [
+            "fingerprint"
+          ],
+          "Examples": []
+        },
+        "FromString": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Get": {
+          "Description": "Get locates the filename given in Hugo's filesystems: static, assets and content (in that order)\nand creates a Resource object that can be used for further transformations.",
+          "Args": [
+            "filename"
+          ],
+          "Aliases": null,
+          "Examples": []
+        },
+        "Minify": {
+          "Description": "Minify minifies the given Resource using the MediaType to pick the correct\nminifier.",
+          "Args": [
+            "r"
+          ],
+          "Aliases": [
+            "minify"
+          ],
+          "Examples": []
+        },
+        "PostCSS": {
+          "Description": "PostCSS processes the given Resource with PostCSS",
+          "Args": [
+            "args"
+          ],
+          "Aliases": [
+            "postCSS"
+          ],
+          "Examples": []
+        },
+        "ToCSS": {
+          "Description": "ToCSS converts the given Resource to CSS. You can optional provide an Options\nobject or a target path (string) as first argument.",
+          "Args": [
+            "args"
+          ],
+          "Aliases": [
+            "toCSS"
+          ],
+          "Examples": []
         }
       },
       "safe": {
@@ -3100,6 +3528,92 @@
           ]
         }
       },
+      "site": {
+        "BaseURL": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Data": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Hugo": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "IsServer": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Language": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "LastChange": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Menus": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Pages": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Params": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "RegularPages": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "ServerPort": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Sites": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Taxonomies": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        },
+        "Title": {
+          "Description": "",
+          "Args": null,
+          "Aliases": null,
+          "Examples": null
+        }
+      },
       "strings": {
         "Chomp": {
           "Description": "Chomp returns a copy of s with all trailing newline characters removed.",
@@ -3162,6 +3676,19 @@
             [
               "{{ findRE \"[G|g]o\" \"Hugo is a static side generator written in Go.\" \"1\" }}",
               "[go]"
+            ]
+          ]
+        },
+        "FirstUpper": {
+          "Description": "FirstUpper returns a string with the first character as upper case.",
+          "Args": [
+            "s"
+          ],
+          "Aliases": null,
+          "Examples": [
+            [
+              "{{ \"hugo rocks!\" | strings.FirstUpper }}",
+              "Hugo rocks!"
             ]
           ]
         },
@@ -3443,6 +3970,25 @@
           ]
         }
       },
+      "templates": {
+        "Exists": {
+          "Description": "Exists returns whether the template with the given name exists.\nNote that this is the Unix-styled relative path including filename suffix,\ne.g. partials/header.html",
+          "Args": [
+            "name"
+          ],
+          "Aliases": null,
+          "Examples": [
+            [
+              "{{ if (templates.Exists \"partials/header.html\") }}Yes!{{ end }}",
+              "Yes!"
+            ],
+            [
+              "{{ if not (templates.Exists \"partials/doesnotexist.html\") }}No!{{ end }}",
+              "No!"
+            ]
+          ]
+        }
+      },
       "time": {
         "AsTime": {
           "Description": "AsTime converts the textual representation of the datetime string into\na time.Time interface.",
@@ -3632,6 +4178,25 @@
               "{\n   \"title\": \"Hello World\"\n}\n"
             ]
           ]
+        },
+        "Unmarshal": {
+          "Description": "Unmarshal unmarshals the data given, which can be either a string\nor a Resource. Supported formats are JSON, TOML, YAML, and CSV.\nYou can optionally provide an options map as the first argument.",
+          "Args": [
+            "args"
+          ],
+          "Aliases": [
+            "unmarshal"
+          ],
+          "Examples": [
+            [
+              "{{ \"hello = \\\"Hello World\\\"\" | transform.Unmarshal }}",
+              "map[hello:Hello World]"
+            ],
+            [
+              "{{ \"hello = \\\"Hello World\\\"\" | resources.FromString \"data/greetings.toml\" | transform.Unmarshal }}",
+              "map[hello:Hello World]"
+            ]
+          ]
         }
       },
       "urls": {
@@ -3680,7 +4245,7 @@
           "Description": "Ref returns the absolute URL path to a given content item.",
           "Args": [
             "in",
-            "refs"
+            "args"
           ],
           "Aliases": [
             "ref"
@@ -3701,7 +4266,7 @@
           "Description": "RelRef returns the relative URL path to a given content item.",
           "Args": [
             "in",
-            "refs"
+            "args"
           ],
           "Aliases": [
             "relref"

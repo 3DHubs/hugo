@@ -119,7 +119,7 @@ Hugo now has:
 
 var templateFuncs = template.FuncMap{
 	"isPatch": func(c changeLog) bool {
-		return strings.Count(c.Version, ".") > 1
+		return !strings.HasSuffix(c.Version, "0")
 	},
 	"issue": func(id int) string {
 		return fmt.Sprintf(issueLinkTemplate, id, id)
@@ -286,7 +286,7 @@ func (r *ReleaseHandler) writeReleaseNotesToDocs(title, sourceFilename string) (
 	defer f.Close()
 
 	fmTail := ""
-	if strings.Count(title, ".") > 1 {
+	if !strings.HasSuffix(title, ".0") {
 		// Bug fix release
 		fmTail = `
 images:

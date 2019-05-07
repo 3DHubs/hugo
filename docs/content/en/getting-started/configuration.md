@@ -18,6 +18,9 @@ aliases: [/overview/source-directory/,/overview/configuration/]
 toc: true
 ---
 
+
+## Configuration File
+
 Hugo uses the `config.toml`, `config.yaml`, or `config.json` (if found in the
 site root) as the default site config file.
 
@@ -35,6 +38,37 @@ hugo --config a.toml,b.toml,c.toml
 Multiple site config files can be specified as a comma-separated string to the `--config` switch.
 {{% /note %}}
 
+TODO: distinct config.toml and others (the root object files)
+
+## Configuration Directory
+
+In addition to using a single site config file, one can use the `configDir` directory (default to `config/`) to maintain easier organization and environment specific settings.
+
+- Each file represents a configuration root object, such as `Params`, `Menus`, `Languages` etc...
+- Each directory holds a group of files containing settings unique to an environment.
+- Files can be localized to become language specific.
+
+
+```
+config
+├── _default
+│   ├── config.toml
+│   ├── languages.toml
+│   ├── menus.en.toml
+│   ├── menus.zh.toml
+│   └── params.toml
+├── staging
+│   ├── config.toml
+│   └── params.toml
+└── production
+    ├── config.toml
+    └── params.toml
+```
+
+Considering the structure above, when running `hugo --environment staging`, Hugo will use every settings from `config/_default` and merge `staging`'s on top of those.
+{{% note %}}
+Default environments are __development__ with `hugo serve` and __production__ with `hugo`.
+{{%/ note %}}
 ## All Configuration Settings
 
 The following is the full list of Hugo-defined variables with their default
@@ -62,6 +96,9 @@ buildExpired  (false)
 buildFuture (false)
 : Include content with publishdate in the future.
 
+caches
+: See [Configure File Caches](#configure-file-caches)
+
 canonifyURLs (false)
 : Enable to turn relative URLs into absolute.
 
@@ -76,6 +113,9 @@ defaultContentLanguage ("en")
 
 defaultContentLanguageInSubdir (false)
 : Render the default content language in subdir, e.g. `content/en/`. The site root `/` will then redirect to `/en/`.
+
+disableAliases (false)
+: Will disable generation of alias redirects. Note that even if `disableAliases` is set, the aliases themselves are preserved on the page. The motivation with this is to be able to generate 301 redirects in an `.htacess`, a Netlify `_redirects` file or similar using a custom output format.
 
 disableHugoGeneratorInject (false)
 : Hugo will, by default, inject a generator meta tag in the HTML head on the _home page only_. You can turn it off, but we would really appreciate if you don't, as this is a good way to watch Hugo's popularity on the rise.
@@ -94,6 +134,9 @@ enableEmoji (false)
 
 enableGitInfo (false)
 : Enable `.GitInfo` object for each page (if the Hugo site is versioned by Git). This will then update the `Lastmod` parameter for each page using the last git commit date for that content file.
+
+enableInlineShortcodes
+: Enable inline shortcode support. See [Inline Shortcodes](/templates/shortcode-templates/#inline-shortcodes).
 
 enableMissingTranslationPlaceholders (false)
 : Show a placeholder instead of the default value or an empty string if a translation is missing.
@@ -126,6 +169,9 @@ languages
 languageCode ("")
 : The site's language code.
 
+languageName ("")
+: The site's language name.
+
 disableLanguages
 : See [Disable a Language](/content-management/multilingual/#disable-a-language)
 
@@ -154,7 +200,7 @@ noTimes (false)
 : Don't sync modification time of files.
 
 paginate (10)
-: Default number of pages per page in [pagination](/templates/pagination/).
+: Default number of elements per page in [pagination](/templates/pagination/).
 
 paginatePath ("page")
 : The path element used during pagination (https://example.com/page/2).
@@ -164,9 +210,6 @@ permalinks
 
 pluralizeListTitles (true)
 : Pluralize titles in lists.
-
-preserveTaxonomyNames (false)
-: Preserve special characters in taxonomy names ("Gérard Depardieu" vs "Gerard Depardieu").
 
 publishDir ("public")
 : The directory to where Hugo will write the final static site (the HTML files etc.).
@@ -186,7 +229,7 @@ related
 relativeURLs (false)
 : Enable this to make all relative URLs relative to content root. Note that this does not affect absolute URLs.
 
-refLinksErrorLevel ("ERROR") 
+refLinksErrorLevel ("ERROR")
 : When using `ref` or `relref` to resolve page links and a link cannot resolved, it will be logged with this logg level. Valid values are `ERROR` (default) or `WARNING`. Any `ERROR` will fail the build (`exit -1`).
 
 refLinksNotFoundURL
@@ -208,7 +251,7 @@ stepAnalysis (false)
 : Display memory and timing of different steps of the program.
 
 summaryLength (70)
-: The length of text to show in a [`.Summary`](/content-management/summaries/#hugo-defined-automatic-summary-splitting).
+: The length of text in words to show in a [`.Summary`](/content-management/summaries/#hugo-defined-automatic-summary-splitting).
 
 taxonomies
 : See [Configure Taxonomies](/content-management/taxonomies#configure-taxonomies).
@@ -251,6 +294,11 @@ enableemoji: true
 ```
 {{% /note %}}
 
+## Configuration Environment Variables
+
+HUGO_NUMWORKERMULTIPLIER
+: Can be set to increase or reduce the number of workers used in parallel processing in Hugo. If not set, the number of logical CPUs will be used.
+
 ## Configuration Lookup Order
 
 Similar to the template [lookup order][], Hugo has a default set of rules for searching for a configuration file in the root of your website's source directory as a default behavior:
@@ -271,7 +319,7 @@ baseURL: "https://yoursite.example.com/"
 title: "My Hugo Site"
 footnoteReturnLinkContents: "↩"
 permalinks:
-  post: /:year/:month/:title/
+  posts: /:year/:month/:title/
 params:
   Subtitle: "Hugo is Absurdly Fast!"
   AuthorName: "Jon Doe"
@@ -399,6 +447,46 @@ However, if you have specific needs with respect to Markdown, Hugo exposes some 
 ## Configure Additional Output Formats
 
 Hugo v0.20 introduced the ability to render your content to multiple output formats (e.g., to JSON, AMP html, or CSV). See [Output Formats][] for information on how to add these values to your Hugo project's configuration file.
+
+## Configure File Caches
+
+Since Hugo 0.52 you can configure more than just the `cacheDir`. This is the default configuration:
+
+```toml
+[caches]
+[caches.getjson]
+dir = ":cacheDir/:project"
+maxAge = -1
+[caches.getcsv]
+dir = ":cacheDir/:project"
+maxAge = -1
+[caches.images]
+dir = ":resourceDir/_gen"
+maxAge = -1
+[caches.assets]
+dir = ":resourceDir/_gen"
+maxAge = -1
+```
+
+
+You can override any of these cache setting in your own `config.toml`.
+
+### The keywords explained
+
+`:cacheDir`
+: This is the value of the `cacheDir` config option if set (can also be set via OS env variable `HUGO_CACHEDIR`). It will fall back to `/opt/build/cache/hugo_cache/` on Netlify, or a `hugo_cache` directory below the OS temp dir for the others. This means that if you run your builds on Netlify, all caches configured with `:cacheDir` will be saved and restored on the next build. For other CI vendors, please read their documentation. For an CircleCI example, see [this configuration](https://github.com/bep/hugo-sass-test/blob/6c3960a8f4b90e8938228688bc49bdcdd6b2d99e/.circleci/config.yml).
+
+`:project`
+: The base directory name of the current Hugo project. This means that, in its default setting, every project will have separated file caches, which means that when you do `hugo --gc` you will not touch files related to other Hugo projects running on the same PC.
+
+`:resourceDir`
+: This is the value of the `resourceDir` config option.
+
+maxAge
+: This is the duration before a cache entry will be evicted, -1 means forever and 0 effectively turns that particular cache off. Uses Go's `time.Duration`, so valid values are `"10s"` (10 seconds), `"10m"` (10 minutes) and `"10h"` (10 hours).
+
+dir
+: The absolute path to where the files for this cache will be stored. Allowed starting placeholders are `:cacheDir` and `:resourceDir` (see above).
 
 ## Configuration Format Specs
 

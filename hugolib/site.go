@@ -1,4 +1,4 @@
-// Copyright 2017 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@ package hugolib
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -23,6 +22,7 @@ import (
 	"mime"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -30,41 +30,42 @@ import (
 	"time"
 
 	"github.com/gohugoio/hugo/common/maps"
+
+	"github.com/pkg/errors"
+
+	"github.com/gohugoio/hugo/common/text"
+
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/publisher"
-	"github.com/gohugoio/hugo/resource"
+	_errors "github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/langs"
 
-	src "github.com/gohugoio/hugo/source"
-
-	"golang.org/x/sync/errgroup"
+	"github.com/gohugoio/hugo/resources/page"
 
 	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/lazy"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/gohugoio/hugo/media"
-
-	"github.com/markbates/inflect"
 
 	"github.com/fsnotify/fsnotify"
 	bp "github.com/gohugoio/hugo/bufferpool"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/helpers"
-	"github.com/gohugoio/hugo/hugolib/pagemeta"
+	"github.com/gohugoio/hugo/navigation"
 	"github.com/gohugoio/hugo/output"
-	"github.com/gohugoio/hugo/parser"
 	"github.com/gohugoio/hugo/related"
+	"github.com/gohugoio/hugo/resources"
+	"github.com/gohugoio/hugo/resources/page/pagemeta"
+	"github.com/gohugoio/hugo/resources/resource"
 	"github.com/gohugoio/hugo/source"
 	"github.com/gohugoio/hugo/tpl"
+
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
-	"github.com/spf13/nitro"
 	"github.com/spf13/viper"
 )
-
-// used to indicate if run as a test.
-var testMode bool
-
-var defaultTimer *nitro.B
 
 // Site contains all the information relevant for constructing a static
 // site.  The basic flow of information is as follows:
@@ -84,36 +85,31 @@ var defaultTimer *nitro.B
 //
 // 5. The entire collection of files is written to disk.
 type Site struct {
-	owner *HugoSites
+
+	// The owning container. When multiple languages, there will be multiple
+	// sites.
+	h *HugoSites
 
 	*PageCollections
 
 	Taxonomies TaxonomyList
 
-	// Plural is what we get in the folder, so keep track of this mapping
-	// to get the singular form from that value.
-	taxonomiesPluralSingular map[string]string
-
-	// This is temporary, see https://github.com/gohugoio/hugo/issues/2835
-	// Maps 	"actors-gerard-depardieu" to "Gérard Depardieu" when preserveTaxonomyNames
-	// is set.
-	taxonomiesOrigKey map[string]string
+	taxonomyNodes *taxonomyNodeInfos
 
 	Sections Taxonomy
 	Info     SiteInfo
-	Menus    Menus
-	timer    *nitro.B
 
 	layoutHandler *output.LayoutHandler
 
-	draftCount   int
-	futureCount  int
-	expiredCount int
+	buildStats *buildStats
 
-	Data     map[string]interface{}
-	Language *langs.Language
+	language *langs.Language
+
+	siteCfg siteConfigHolder
 
 	disabledKinds map[string]bool
+
+	enableInlineShortcodes bool
 
 	// Output formats defined in site config per Page Kind, or some defaults
 	// if not set.
@@ -126,7 +122,7 @@ type Site struct {
 	outputFormatsConfig output.Formats
 	mediaTypesConfig    media.Types
 
-	siteConfig SiteConfig
+	siteConfigConfig SiteConfig
 
 	// How to handle page front matter.
 	frontmatterHandler pagemeta.FrontMatterHandler
@@ -147,21 +143,162 @@ type Site struct {
 	// The func used to title case titles.
 	titleFunc func(s string) string
 
-	relatedDocsHandler *relatedDocsHandler
+	relatedDocsHandler *page.RelatedDocsHandler
 	siteRefLinker
 
 	publisher publisher.Publisher
+
+	menus navigation.Menus
+
+	// Shortcut to the home page. Note that this may be nil if
+	// home page, for some odd reason, is disabled.
+	home *pageState
+
+	// The last modification date of this site.
+	lastmod time.Time
+
+	// Lazily loaded site dependencies
+	init *siteInit
+}
+
+type siteConfigHolder struct {
+	sitemap          config.Sitemap
+	taxonomiesConfig map[string]string
+	timeout          time.Duration
+	hasCJKLanguage   bool
+	enableEmoji      bool
+}
+
+// Lazily loaded site dependencies.
+type siteInit struct {
+	prevNext          *lazy.Init
+	prevNextInSection *lazy.Init
+	menus             *lazy.Init
+}
+
+func (init *siteInit) Reset() {
+	init.prevNext.Reset()
+	init.prevNextInSection.Reset()
+	init.menus.Reset()
+}
+
+func (s *Site) initInit(init *lazy.Init, pctx pageContext) {
+	_, err := init.Do()
+	if err != nil {
+		s.h.FatalError(pctx.wrapError(err))
+	}
+}
+
+func (s *Site) prepareInits() {
+	s.init = &siteInit{}
+
+	var init lazy.Init
+
+	s.init.prevNext = init.Branch(func() (interface{}, error) {
+		regularPages := s.findWorkPagesByKind(page.KindPage)
+		for i, p := range regularPages {
+			if p.posNextPrev == nil {
+				continue
+			}
+			p.posNextPrev.nextPage = nil
+			p.posNextPrev.prevPage = nil
+
+			if i > 0 {
+				p.posNextPrev.nextPage = regularPages[i-1]
+			}
+
+			if i < len(regularPages)-1 {
+				p.posNextPrev.prevPage = regularPages[i+1]
+			}
+		}
+		return nil, nil
+	})
+
+	s.init.prevNextInSection = init.Branch(func() (interface{}, error) {
+		var rootSection []int
+		for i, p1 := range s.workAllPages {
+			if p1.IsPage() && p1.Section() == "" {
+				rootSection = append(rootSection, i)
+			}
+			if p1.IsSection() {
+				sectionPages := p1.Pages()
+				for i, p2 := range sectionPages {
+					p2s := p2.(*pageState)
+					if p2s.posNextPrevSection == nil {
+						continue
+					}
+
+					p2s.posNextPrevSection.nextPage = nil
+					p2s.posNextPrevSection.prevPage = nil
+
+					if i > 0 {
+						p2s.posNextPrevSection.nextPage = sectionPages[i-1]
+					}
+
+					if i < len(sectionPages)-1 {
+						p2s.posNextPrevSection.prevPage = sectionPages[i+1]
+					}
+				}
+			}
+		}
+
+		for i, j := range rootSection {
+			p := s.workAllPages[j]
+			if i > 0 {
+				p.posNextPrevSection.nextPage = s.workAllPages[rootSection[i-1]]
+			}
+
+			if i < len(rootSection)-1 {
+				p.posNextPrevSection.prevPage = s.workAllPages[rootSection[i+1]]
+			}
+		}
+
+		return nil, nil
+	})
+
+	s.init.menus = init.Branch(func() (interface{}, error) {
+		s.assembleMenus()
+		return nil, nil
+	})
+
+}
+
+// Build stats for a given site.
+type buildStats struct {
+	draftCount   int
+	futureCount  int
+	expiredCount int
+}
+
+// TODO(bep) consolidate all site stats into this
+func (b *buildStats) update(p page.Page) {
+	if p.Draft() {
+		b.draftCount++
+	}
+
+	if resource.IsFuture(p) {
+		b.futureCount++
+	}
+
+	if resource.IsExpired(p) {
+		b.expiredCount++
+	}
 }
 
 type siteRenderingContext struct {
 	output.Format
 }
 
+func (s *Site) Menus() navigation.Menus {
+	s.init.menus.Do()
+	return s.menus
+}
+
 func (s *Site) initRenderFormats() {
 	formatSet := make(map[string]bool)
 	formats := output.Formats{}
-	for _, p := range s.Pages {
-		for _, f := range p.outputFormats {
+	for _, p := range s.workAllPages {
+		for _, f := range p.m.configuredOutputFormats {
 			if !formatSet[f.Name] {
 				formats = append(formats, f)
 				formatSet[f.Name] = true
@@ -169,8 +306,28 @@ func (s *Site) initRenderFormats() {
 		}
 	}
 
+	// Add the per kind configured output formats
+	for _, kind := range allKindsInPages {
+		if siteFormats, found := s.outputFormats[kind]; found {
+			for _, f := range siteFormats {
+				if !formatSet[f.Name] {
+					formats = append(formats, f)
+					formatSet[f.Name] = true
+				}
+			}
+		}
+	}
+
 	sort.Sort(formats)
 	s.renderFormats = formats
+}
+
+func (s *Site) GetRelatedDocsHandler() *page.RelatedDocsHandler {
+	return s.relatedDocsHandler
+}
+
+func (s *Site) Language() *langs.Language {
+	return s.language
 }
 
 func (s *Site) isEnabled(kind string) bool {
@@ -183,21 +340,26 @@ func (s *Site) isEnabled(kind string) bool {
 // reset returns a new Site prepared for rebuild.
 func (s *Site) reset() *Site {
 	return &Site{Deps: s.Deps,
-		layoutHandler:       output.NewLayoutHandler(),
-		disabledKinds:       s.disabledKinds,
-		titleFunc:           s.titleFunc,
-		relatedDocsHandler:  newSearchIndexHandler(s.relatedDocsHandler.cfg),
-		siteRefLinker:       s.siteRefLinker,
-		outputFormats:       s.outputFormats,
-		rc:                  s.rc,
-		outputFormatsConfig: s.outputFormatsConfig,
-		frontmatterHandler:  s.frontmatterHandler,
-		mediaTypesConfig:    s.mediaTypesConfig,
-		Language:            s.Language,
-		owner:               s.owner,
-		publisher:           s.publisher,
-		siteConfig:          s.siteConfig,
-		PageCollections:     newPageCollections()}
+		layoutHandler:          output.NewLayoutHandler(),
+		disabledKinds:          s.disabledKinds,
+		titleFunc:              s.titleFunc,
+		relatedDocsHandler:     s.relatedDocsHandler.Clone(),
+		siteRefLinker:          s.siteRefLinker,
+		outputFormats:          s.outputFormats,
+		rc:                     s.rc,
+		outputFormatsConfig:    s.outputFormatsConfig,
+		frontmatterHandler:     s.frontmatterHandler,
+		mediaTypesConfig:       s.mediaTypesConfig,
+		language:               s.language,
+		h:                      s.h,
+		publisher:              s.publisher,
+		siteConfigConfig:       s.siteConfigConfig,
+		enableInlineShortcodes: s.enableInlineShortcodes,
+		buildStats:             &buildStats{},
+		init:                   s.init,
+		PageCollections:        newPageCollections(),
+		siteCfg:                s.siteCfg,
+	}
 
 }
 
@@ -248,6 +410,8 @@ func newSite(cfg deps.DepsCfg) (*Site, error) {
 		return nil, err
 	}
 
+	taxonomies := cfg.Language.GetStringMapString("taxonomies")
+
 	var relatedContentConfig related.Config
 
 	if cfg.Language.IsSet("related") {
@@ -257,7 +421,6 @@ func newSite(cfg deps.DepsCfg) (*Site, error) {
 		}
 	} else {
 		relatedContentConfig = related.DefaultConfig
-		taxonomies := cfg.Language.GetStringMapString("taxonomies")
 		if _, found := taxonomies["tag"]; found {
 			relatedContentConfig.Add(related.IndexConfig{Name: "tags", Weight: 80})
 		}
@@ -270,19 +433,32 @@ func newSite(cfg deps.DepsCfg) (*Site, error) {
 		return nil, err
 	}
 
-	s := &Site{
-		PageCollections:     c,
-		layoutHandler:       output.NewLayoutHandler(),
-		Language:            cfg.Language,
-		disabledKinds:       disabledKinds,
-		titleFunc:           titleFunc,
-		relatedDocsHandler:  newSearchIndexHandler(relatedContentConfig),
-		outputFormats:       outputFormats,
-		rc:                  &siteRenderingContext{output.HTMLFormat},
-		outputFormatsConfig: siteOutputFormatsConfig,
-		mediaTypesConfig:    siteMediaTypesConfig,
-		frontmatterHandler:  frontMatterHandler,
+	siteConfig := siteConfigHolder{
+		sitemap:          config.DecodeSitemap(config.Sitemap{Priority: -1, Filename: "sitemap.xml"}, cfg.Language.GetStringMap("sitemap")),
+		taxonomiesConfig: taxonomies,
+		timeout:          time.Duration(cfg.Language.GetInt("timeout")) * time.Millisecond,
+		hasCJKLanguage:   cfg.Language.GetBool("hasCJKLanguage"),
+		enableEmoji:      cfg.Language.Cfg.GetBool("enableEmoji"),
 	}
+
+	s := &Site{
+		PageCollections:        c,
+		layoutHandler:          output.NewLayoutHandler(),
+		language:               cfg.Language,
+		disabledKinds:          disabledKinds,
+		titleFunc:              titleFunc,
+		relatedDocsHandler:     page.NewRelatedDocsHandler(relatedContentConfig),
+		outputFormats:          outputFormats,
+		rc:                     &siteRenderingContext{output.HTMLFormat},
+		outputFormatsConfig:    siteOutputFormatsConfig,
+		mediaTypesConfig:       siteMediaTypesConfig,
+		frontmatterHandler:     frontMatterHandler,
+		buildStats:             &buildStats{},
+		enableInlineShortcodes: cfg.Language.GetBool("enableInlineShortcodes"),
+		siteCfg:                siteConfig,
+	}
+
+	s.prepareInits()
 
 	return s, nil
 
@@ -357,52 +533,107 @@ func NewSiteForCfg(cfg deps.DepsCfg) (*Site, error) {
 
 }
 
-type SiteInfos []*SiteInfo
-
-// First is a convenience method to get the first Site, i.e. the main language.
-func (s SiteInfos) First() *SiteInfo {
-	if len(s) == 0 {
-		return nil
-	}
-	return s[0]
-}
-
 type SiteInfo struct {
-	Taxonomies TaxonomyList
-	Authors    AuthorList
-	Social     SiteSocial
-	*PageCollections
-	Menus                          *Menus
-	Hugo                           *HugoInfo
-	Title                          string
-	RSSLink                        string
-	Author                         map[string]interface{}
-	LanguageCode                   string
-	Copyright                      string
-	LastChange                     time.Time
-	Permalinks                     PermalinkOverrides
-	Params                         map[string]interface{}
-	BuildDrafts                    bool
-	canonifyURLs                   bool
-	relativeURLs                   bool
-	uglyURLs                       func(p *Page) bool
-	preserveTaxonomyNames          bool
-	Data                           *map[string]interface{}
+	Authors page.AuthorList
+	Social  SiteSocial
+
+	hugoInfo     hugo.Info
+	title        string
+	RSSLink      string
+	Author       map[string]interface{}
+	LanguageCode string
+	Copyright    string
+
+	permalinks map[string]string
+
+	LanguagePrefix string
+	Languages      langs.Languages
+
+	BuildDrafts bool
+
+	canonifyURLs bool
+	relativeURLs bool
+	uglyURLs     func(p page.Page) bool
+
 	owner                          *HugoSites
 	s                              *Site
-	Language                       *langs.Language
-	LanguagePrefix                 string
-	Languages                      langs.Languages
+	language                       *langs.Language
 	defaultContentLanguageInSubdir bool
 	sectionPagesMenu               string
 }
 
+func (s *SiteInfo) Pages() page.Pages {
+	return s.s.Pages()
+
+}
+
+func (s *SiteInfo) RegularPages() page.Pages {
+	return s.s.RegularPages()
+
+}
+
+func (s *SiteInfo) AllPages() page.Pages {
+	return s.s.AllPages()
+}
+
+func (s *SiteInfo) AllRegularPages() page.Pages {
+	return s.s.AllRegularPages()
+}
+
+func (s *SiteInfo) Permalinks() map[string]string {
+	// Remove in 0.57
+	helpers.Deprecated("Site", ".Permalinks", "", false)
+	return s.permalinks
+}
+
+func (s *SiteInfo) LastChange() time.Time {
+	return s.s.lastmod
+}
+
+func (s *SiteInfo) Title() string {
+	return s.title
+}
+
+func (s *SiteInfo) Site() page.Site {
+	return s
+}
+
+func (s *SiteInfo) Menus() navigation.Menus {
+	return s.s.Menus()
+}
+
+// TODO(bep) type
+func (s *SiteInfo) Taxonomies() interface{} {
+	return s.s.Taxonomies
+}
+
+func (s *SiteInfo) Params() map[string]interface{} {
+	return s.s.Language().Params()
+}
+
+func (s *SiteInfo) Data() map[string]interface{} {
+	return s.s.h.Data()
+}
+
+func (s *SiteInfo) Language() *langs.Language {
+	return s.language
+}
+
 func (s *SiteInfo) Config() SiteConfig {
-	return s.s.siteConfig
+	return s.s.siteConfigConfig
+}
+
+func (s *SiteInfo) Hugo() hugo.Info {
+	return s.hugoInfo
+}
+
+// Sites is a convenience method to get all the Hugo sites/languages configured.
+func (s *SiteInfo) Sites() page.Sites {
+	return s.s.h.siteInfos()
 }
 
 func (s *SiteInfo) String() string {
-	return fmt.Sprintf("Site(%q)", s.Title)
+	return fmt.Sprintf("Site(%q)", s.title)
 }
 
 func (s *SiteInfo) BaseURL() template.URL {
@@ -457,7 +688,7 @@ func (s *SiteInfo) Param(key interface{}) (interface{}, error) {
 		return nil, err
 	}
 	keyStr = strings.ToLower(keyStr)
-	return s.Params[keyStr], nil
+	return s.Params()[keyStr], nil
 }
 
 func (s *SiteInfo) IsMultiLingual() bool {
@@ -486,19 +717,24 @@ func newSiteRefLinker(cfg config.Provider, s *Site) (siteRefLinker, error) {
 	return siteRefLinker{s: s, errorLogger: logger, notFoundURL: notFoundURL}, nil
 }
 
-func (s siteRefLinker) logNotFound(ref, what string, p *Page) {
-	if p != nil {
+func (s siteRefLinker) logNotFound(ref, what string, p page.Page, position text.Position) {
+	if position.IsValid() {
+		s.errorLogger.Printf("[%s] REF_NOT_FOUND: Ref %q: %s: %s", s.s.Lang(), ref, position.String(), what)
+	} else if p == nil {
 		s.errorLogger.Printf("[%s] REF_NOT_FOUND: Ref %q: %s", s.s.Lang(), ref, what)
 	} else {
-		s.errorLogger.Printf("[%s] REF_NOT_FOUND: Ref %q from page %q: %s", s.s.Lang(), ref, p.absoluteSourceRef(), what)
+		s.errorLogger.Printf("[%s] REF_NOT_FOUND: Ref %q from page %q: %s", s.s.Lang(), ref, p.Path(), what)
 	}
-
 }
 
-func (s *siteRefLinker) refLink(ref string, page *Page, relative bool, outputFormat string) (string, error) {
+func (s *siteRefLinker) refLink(ref string, source interface{}, relative bool, outputFormat string) (string, error) {
+
+	p, err := unwrapPage(source)
+	if err != nil {
+		return "", err
+	}
 
 	var refURL *url.URL
-	var err error
 
 	ref = filepath.ToSlash(ref)
 
@@ -508,19 +744,26 @@ func (s *siteRefLinker) refLink(ref string, page *Page, relative bool, outputFor
 		return s.notFoundURL, err
 	}
 
-	var target *Page
+	var target page.Page
 	var link string
 
 	if refURL.Path != "" {
-		target, err := s.s.getPageNew(page, refURL.Path)
+		target, err := s.s.getPageNew(p, refURL.Path)
+		var pos text.Position
+		if err != nil || target == nil {
+			if p, ok := source.(text.Positioner); ok {
+				pos = p.Position()
+
+			}
+		}
 
 		if err != nil {
-			s.logNotFound(refURL.Path, err.Error(), page)
+			s.logNotFound(refURL.Path, err.Error(), p, pos)
 			return s.notFoundURL, nil
 		}
 
 		if target == nil {
-			s.logNotFound(refURL.Path, "page not found", page)
+			s.logNotFound(refURL.Path, "page not found", p, pos)
 			return s.notFoundURL, nil
 		}
 
@@ -530,7 +773,7 @@ func (s *siteRefLinker) refLink(ref string, page *Page, relative bool, outputFor
 			o := target.OutputFormats().Get(outputFormat)
 
 			if o == nil {
-				s.logNotFound(refURL.Path, fmt.Sprintf("output format %q", outputFormat), page)
+				s.logNotFound(refURL.Path, fmt.Sprintf("output format %q", outputFormat), p, pos)
 				return s.notFoundURL, nil
 			}
 			permalinker = o
@@ -544,20 +787,24 @@ func (s *siteRefLinker) refLink(ref string, page *Page, relative bool, outputFor
 	}
 
 	if refURL.Fragment != "" {
+		_ = target
 		link = link + "#" + refURL.Fragment
-
-		if refURL.Path != "" && target != nil && !target.getRenderingConfig().PlainIDAnchors {
-			link = link + ":" + target.UniqueID()
-		} else if page != nil && !page.getRenderingConfig().PlainIDAnchors {
-			link = link + ":" + page.UniqueID()
+		if pctx, ok := target.(pageContext); ok && !target.File().IsZero() && !pctx.getRenderingConfig().PlainIDAnchors {
+			if refURL.Path != "" {
+				link = link + ":" + target.File().UniqueID()
+			}
+		} else if pctx, ok := p.(pageContext); ok && !p.File().IsZero() && !pctx.getRenderingConfig().PlainIDAnchors {
+			link = link + ":" + p.File().UniqueID()
 		}
-	}
 
+	}
 	return link, nil
 }
 
 // Ref will give an absolute URL to ref in the given Page.
-func (s *SiteInfo) Ref(ref string, page *Page, options ...string) (string, error) {
+func (s *SiteInfo) Ref(ref string, page page.Page, options ...string) (string, error) {
+	// Remove in Hugo 0.54
+	helpers.Deprecated("Site", ".Ref", "Use .Site.GetPage", true)
 	outputFormat := ""
 	if len(options) > 0 {
 		outputFormat = options[0]
@@ -567,7 +814,9 @@ func (s *SiteInfo) Ref(ref string, page *Page, options ...string) (string, error
 }
 
 // RelRef will give an relative URL to ref in the given Page.
-func (s *SiteInfo) RelRef(ref string, page *Page, options ...string) (string, error) {
+func (s *SiteInfo) RelRef(ref string, page page.Page, options ...string) (string, error) {
+	// Remove in Hugo 0.54
+	helpers.Deprecated("Site", ".RelRef", "Use .Site.GetPage", true)
 	outputFormat := ""
 	if len(options) > 0 {
 		outputFormat = options[0]
@@ -577,22 +826,11 @@ func (s *SiteInfo) RelRef(ref string, page *Page, options ...string) (string, er
 }
 
 func (s *Site) running() bool {
-	return s.owner != nil && s.owner.running
+	return s.h != nil && s.h.running
 }
 
 func (s *Site) multilingual() *Multilingual {
-	return s.owner.multilingual
-}
-
-func init() {
-	defaultTimer = nitro.Initalize()
-}
-
-func (s *Site) timerStep(step string) {
-	if s.timer == nil {
-		s.timer = defaultTimer
-	}
-	s.timer.Step(step)
+	return s.h.multilingual
 }
 
 type whatChanged struct {
@@ -690,9 +928,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 
 	s.Log.DEBUG.Printf("Rebuild for events %q", events)
 
-	h := s.owner
-
-	s.timerStep("initialize rebuild")
+	h := s.h
 
 	// First we need to determine what changed
 
@@ -713,7 +949,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 	cachePartitions := make([]string, len(events))
 
 	for i, ev := range events {
-		cachePartitions[i] = resource.ResourceKeyPartition(ev.Name)
+		cachePartitions[i] = resources.ResourceKeyPartition(ev.Name)
 
 		if s.isContentDirEvent(ev) {
 			logger.Println("Source changed", ev)
@@ -724,7 +960,6 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 			tmplChanged = append(tmplChanged, ev)
 
 			if strings.Contains(ev.Name, "shortcodes") {
-				clearIsInnerShortcodeCache()
 				shortcode := filepath.Base(ev.Name)
 				shortcode = strings.TrimSuffix(shortcode, filepath.Ext(shortcode))
 				shortcodesChanged[shortcode] = true
@@ -741,42 +976,41 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 	}
 
 	// These in memory resource caches will be rebuilt on demand.
-	for _, s := range s.owner.Sites {
+	for _, s := range s.h.Sites {
 		s.ResourceSpec.ResourceCache.DeletePartitions(cachePartitions...)
 	}
 
 	if len(tmplChanged) > 0 || len(i18nChanged) > 0 {
-		sites := s.owner.Sites
+		sites := s.h.Sites
 		first := sites[0]
+
+		s.h.init.Reset()
 
 		// TOD(bep) globals clean
 		if err := first.Deps.LoadResources(); err != nil {
 			return whatChanged{}, err
 		}
 
-		s.TemplateHandler().PrintErrors()
-
 		for i := 1; i < len(sites); i++ {
 			site := sites[i]
 			var err error
 			depsCfg := deps.DepsCfg{
-				Language:      site.Language,
+				Language:      site.language,
 				MediaTypes:    site.mediaTypesConfig,
 				OutputFormats: site.outputFormatsConfig,
 			}
-			site.Deps, err = first.Deps.ForLanguage(depsCfg)
+			site.Deps, err = first.Deps.ForLanguage(depsCfg, func(d *deps.Deps) error {
+				d.Site = &site.Info
+				return nil
+			})
 			if err != nil {
 				return whatChanged{}, err
 			}
 		}
-
-		s.timerStep("template prep")
 	}
 
 	if len(dataChanged) > 0 {
-		if err := s.readDataFromSourceFS(); err != nil {
-			s.Log.ERROR.Println(err)
-		}
+		s.h.init.data.Reset()
 	}
 
 	for _, ev := range sourceChanged {
@@ -812,7 +1046,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 		// pages that keeps a reference to the changed shortcode.
 		pagesWithShortcode := h.findPagesByShortcode(shortcode)
 		for _, p := range pagesWithShortcode {
-			contentFilesChanged = append(contentFilesChanged, p.File.Filename())
+			contentFilesChanged = append(contentFilesChanged, p.File().Filename())
 		}
 	}
 
@@ -843,184 +1077,72 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 
 }
 
-func (s *Site) loadData(fs afero.Fs) (err error) {
-	spec := src.NewSourceSpec(s.PathSpec, fs)
-	fileSystem := spec.NewFilesystem("")
-	s.Data = make(map[string]interface{})
-	for _, r := range fileSystem.Files() {
-		if err := s.handleDataFile(r); err != nil {
-			return err
-		}
-	}
-
-	return
-}
-
-func (s *Site) handleDataFile(r source.ReadableFile) error {
-	var current map[string]interface{}
-
-	f, err := r.Open()
-	if err != nil {
-		return fmt.Errorf("Failed to open data file %q: %s", r.LogicalName(), err)
-	}
-	defer f.Close()
-
-	// Crawl in data tree to insert data
-	current = s.Data
-	keyParts := strings.Split(r.Dir(), helpers.FilePathSeparator)
-	// The first path element is the virtual folder (typically theme name), which is
-	// not part of the key.
-	if len(keyParts) > 1 {
-		for _, key := range keyParts[1:] {
-			if key != "" {
-				if _, ok := current[key]; !ok {
-					current[key] = make(map[string]interface{})
-				}
-				current = current[key].(map[string]interface{})
-			}
-		}
-	}
-
-	data, err := s.readData(r)
-	if err != nil {
-		s.Log.ERROR.Printf("Failed to read data from %s: %s", filepath.Join(r.Path(), r.LogicalName()), err)
-		return nil
-	}
-
-	if data == nil {
-		return nil
-	}
-
-	// filepath.Walk walks the files in lexical order, '/' comes before '.'
-	// this warning could happen if
-	// 1. A theme uses the same key; the main data folder wins
-	// 2. A sub folder uses the same key: the sub folder wins
-	higherPrecedentData := current[r.BaseFileName()]
-
-	switch data.(type) {
-	case nil:
-		// hear the crickets?
-
-	case map[string]interface{}:
-
-		switch higherPrecedentData.(type) {
-		case nil:
-			current[r.BaseFileName()] = data
-		case map[string]interface{}:
-			// merge maps: insert entries from data for keys that
-			// don't already exist in higherPrecedentData
-			higherPrecedentMap := higherPrecedentData.(map[string]interface{})
-			for key, value := range data.(map[string]interface{}) {
-				if _, exists := higherPrecedentMap[key]; exists {
-					s.Log.WARN.Printf("Data for key '%s' in path '%s' is overridden higher precedence data already in the data tree", key, r.Path())
-				} else {
-					higherPrecedentMap[key] = value
-				}
-			}
-		default:
-			// can't merge: higherPrecedentData is not a map
-			s.Log.WARN.Printf("The %T data from '%s' overridden by "+
-				"higher precedence %T data already in the data tree", data, r.Path(), higherPrecedentData)
-		}
-
-	case []interface{}:
-		if higherPrecedentData == nil {
-			current[r.BaseFileName()] = data
-		} else {
-			// we don't merge array data
-			s.Log.WARN.Printf("The %T data from '%s' overridden by "+
-				"higher precedence %T data already in the data tree", data, r.Path(), higherPrecedentData)
-		}
-
-	default:
-		s.Log.ERROR.Printf("unexpected data type %T in file %s", data, r.LogicalName())
-	}
-
-	return nil
-}
-
-func (s *Site) readData(f source.ReadableFile) (interface{}, error) {
-	file, err := f.Open()
-	if err != nil {
-		return nil, fmt.Errorf("readData: failed to open data file: %s", err)
-	}
-	defer file.Close()
-	content := helpers.ReaderToBytes(file)
-
-	switch f.Extension() {
-	case "yaml", "yml":
-		return parser.HandleYAMLData(content)
-	case "json":
-		return parser.HandleJSONData(content)
-	case "toml":
-		return parser.HandleTOMLMetaData(content)
-	default:
-		return nil, fmt.Errorf("Data not supported for extension '%s'", f.Extension())
-	}
-}
-
-func (s *Site) readDataFromSourceFS() error {
-	err := s.loadData(s.PathSpec.BaseFs.Data.Fs)
-	s.timerStep("load data")
-	return err
-}
-
 func (s *Site) process(config BuildCfg) (err error) {
 	if err = s.initialize(); err != nil {
 		return
 	}
-	s.timerStep("initialize")
-
-	if err = s.readDataFromSourceFS(); err != nil {
-		return
-	}
-
-	s.timerStep("load i18n")
-
 	if err := s.readAndProcessContent(); err != nil {
 		return err
 	}
-	s.timerStep("read and convert pages from source")
-
 	return err
 
 }
 
 func (s *Site) setupSitePages() {
-	var siteLastChange time.Time
+	var homeDates *resource.Dates
+	if s.home != nil {
+		// If the home page has no dates set, we fall back to the site dates.
+		homeDates = &s.home.m.Dates
+	}
 
-	for i, page := range s.RegularPages {
-		if i > 0 {
-			page.NextPage = s.RegularPages[i-1]
+	if !s.lastmod.IsZero() && (homeDates == nil || !resource.IsZeroDates(homeDates)) {
+		return
+	}
+
+	if homeDates != nil && !s.lastmod.IsZero() {
+		homeDates.FDate = s.lastmod
+		homeDates.FLastmod = s.lastmod
+		return
+
+	}
+
+	var siteLastmod time.Time
+	var siteLastDate time.Time
+
+	for _, page := range s.workAllPages {
+		if !page.IsPage() {
+			continue
 		}
-
-		if i < len(s.RegularPages)-1 {
-			page.PrevPage = s.RegularPages[i+1]
-		}
-
 		// Determine Site.Info.LastChange
 		// Note that the logic to determine which date to use for Lastmod
 		// is already applied, so this is *the* date to use.
 		// We cannot just pick the last page in the default sort, because
 		// that may not be ordered by date.
-		if page.Lastmod.After(siteLastChange) {
-			siteLastChange = page.Lastmod
+		// TODO(bep) check if this can be done earlier
+		if page.Lastmod().After(siteLastmod) {
+			siteLastmod = page.Lastmod()
+		}
+		if page.Date().After(siteLastDate) {
+			siteLastDate = page.Date()
 		}
 	}
 
-	s.Info.LastChange = siteLastChange
+	s.lastmod = siteLastmod
+
+	if homeDates != nil && resource.IsZeroDates(homeDates) {
+		homeDates.FDate = siteLastDate
+		homeDates.FLastmod = s.lastmod
+	}
+
 }
 
-func (s *Site) render(config *BuildCfg, outFormatIdx int) (err error) {
-	// Clear the global page cache.
-	spc.clear()
+func (s *Site) render(ctx *siteRenderContext) (err error) {
 
-	if outFormatIdx == 0 {
-		if err = s.preparePages(); err != nil {
-			return
-		}
-		s.timerStep("prepare pages")
+	if err := page.Clear(); err != nil {
+		return err
+	}
 
+	if ctx.outIdx == 0 {
 		// Note that even if disableAliases is set, the aliases themselves are
 		// preserved on page. The motivation with this is to be able to generate
 		// 301 redirects in a .htacess file and similar using a custom output format.
@@ -1032,36 +1154,35 @@ func (s *Site) render(config *BuildCfg, outFormatIdx int) (err error) {
 			if err = s.renderAliases(); err != nil {
 				return
 			}
-			s.timerStep("render and write aliases")
 		}
 
 	}
 
-	if err = s.renderPages(config); err != nil {
+	if err = s.renderPages(ctx); err != nil {
 		return
 	}
 
-	s.timerStep("render and write pages")
+	if ctx.outIdx == 0 {
+		if err = s.renderSitemap(); err != nil {
+			return
+		}
 
-	// TODO(bep) render consider this, ref. render404 etc.
-	if outFormatIdx > 0 {
+		if err = s.renderRobotsTXT(); err != nil {
+			return
+		}
+
+		if err = s.render404(); err != nil {
+			return
+		}
+	}
+
+	if !ctx.renderSingletonPages() {
 		return
 	}
 
-	if err = s.renderSitemap(); err != nil {
+	if err = s.renderMainLanguageRedirect(); err != nil {
 		return
 	}
-	s.timerStep("render and write Sitemap")
-
-	if err = s.renderRobotsTXT(); err != nil {
-		return
-	}
-	s.timerStep("render and write robots.txt")
-
-	if err = s.render404(); err != nil {
-		return
-	}
-	s.timerStep("render and write 404")
 
 	return
 }
@@ -1071,8 +1192,6 @@ func (s *Site) Initialise() (err error) {
 }
 
 func (s *Site) initialize() (err error) {
-	s.Menus = Menus{}
-
 	return s.initializeSiteInfo()
 }
 
@@ -1080,38 +1199,32 @@ func (s *Site) initialize() (err error) {
 func (s *SiteInfo) HomeAbsURL() string {
 	base := ""
 	if s.IsMultiLingual() {
-		base = s.Language.Lang
+		base = s.Language().Lang
 	}
 	return s.owner.AbsURL(base, false)
 }
 
 // SitemapAbsURL is a convenience method giving the absolute URL to the sitemap.
 func (s *SiteInfo) SitemapAbsURL() string {
-	sitemapDefault := parseSitemap(s.s.Cfg.GetStringMap("sitemap"))
 	p := s.HomeAbsURL()
 	if !strings.HasSuffix(p, "/") {
 		p += "/"
 	}
-	p += sitemapDefault.Filename
+	p += s.s.siteCfg.sitemap.Filename
 	return p
 }
 
 func (s *Site) initializeSiteInfo() error {
 	var (
-		lang      = s.Language
+		lang      = s.language
 		languages langs.Languages
 	)
 
-	if s.owner != nil && s.owner.multilingual != nil {
-		languages = s.owner.multilingual.Languages
+	if s.h != nil && s.h.multilingual != nil {
+		languages = s.h.multilingual.Languages
 	}
 
-	params := lang.Params()
-
-	permalinks := make(PermalinkOverrides)
-	for k, v := range s.Cfg.GetStringMapString("permalinks") {
-		permalinks[k] = pathPattern(v)
-	}
+	permalinks := s.Cfg.GetStringMapString("permalinks")
 
 	defaultContentInSubDir := s.Cfg.GetBool("defaultContentLanguageInSubdir")
 	defaultContentLanguage := s.Cfg.GetString("defaultContentLanguage")
@@ -1121,7 +1234,7 @@ func (s *Site) initializeSiteInfo() error {
 		languagePrefix = "/" + lang.Lang
 	}
 
-	var uglyURLs = func(p *Page) bool {
+	var uglyURLs = func(p page.Page) bool {
 		return false
 	}
 
@@ -1129,30 +1242,30 @@ func (s *Site) initializeSiteInfo() error {
 	if v != nil {
 		switch vv := v.(type) {
 		case bool:
-			uglyURLs = func(p *Page) bool {
+			uglyURLs = func(p page.Page) bool {
 				return vv
 			}
 		case string:
 			// Is what be get from CLI (--uglyURLs)
 			vvv := cast.ToBool(vv)
-			uglyURLs = func(p *Page) bool {
+			uglyURLs = func(p page.Page) bool {
 				return vvv
 			}
 		default:
 			m := cast.ToStringMapBool(v)
-			uglyURLs = func(p *Page) bool {
+			uglyURLs = func(p page.Page) bool {
 				return m[p.Section()]
 			}
 		}
 	}
 
 	s.Info = SiteInfo{
-		Title:                          lang.GetString("title"),
+		title:                          lang.GetString("title"),
 		Author:                         lang.GetStringMap("author"),
 		Social:                         lang.GetStringMapString("social"),
 		LanguageCode:                   lang.GetString("languageCode"),
 		Copyright:                      lang.GetString("copyright"),
-		Language:                       lang,
+		language:                       lang,
 		LanguagePrefix:                 languagePrefix,
 		Languages:                      languages,
 		defaultContentLanguageInSubdir: defaultContentInSubDir,
@@ -1161,19 +1274,13 @@ func (s *Site) initializeSiteInfo() error {
 		canonifyURLs:                   s.Cfg.GetBool("canonifyURLs"),
 		relativeURLs:                   s.Cfg.GetBool("relativeURLs"),
 		uglyURLs:                       uglyURLs,
-		preserveTaxonomyNames:          lang.GetBool("preserveTaxonomyNames"),
-		PageCollections:                s.PageCollections,
-		Menus:                          &s.Menus,
-		Params:                         params,
-		Permalinks:                     permalinks,
-		Data:                           &s.Data,
-		owner:                          s.owner,
+		permalinks:                     permalinks,
+		owner:                          s.h,
 		s:                              s,
-		// TODO(bep) make this Menu and similar into delegate methods on SiteInfo
-		Taxonomies: s.Taxonomies,
+		hugoInfo:                       hugo.NewInfo(s.Cfg.GetString("environment")),
 	}
 
-	rssOutputFormat, found := s.outputFormats[KindHome].GetByName(output.RSSFormat.Name)
+	rssOutputFormat, found := s.outputFormats[page.KindHome].GetByName(output.RSSFormat.Name)
 
 	if found {
 		s.Info.RSSLink = s.permalink(rssOutputFormat.BaseFilename())
@@ -1192,10 +1299,6 @@ func (s *Site) isDataDirEvent(e fsnotify.Event) bool {
 
 func (s *Site) isLayoutDirEvent(e fsnotify.Event) bool {
 	return s.BaseFs.SourceFilesystems.IsLayout(e.Name)
-}
-
-func (s *Site) absContentDir() string {
-	return s.PathSpec.AbsPathify(s.PathSpec.ContentDir)
 }
 
 func (s *Site) isContentDirEvent(e fsnotify.Event) bool {
@@ -1228,13 +1331,13 @@ func (c *contentCaptureResultHandler) handleBundles(d *bundleDirs) {
 	}
 }
 
-func (c *contentCaptureResultHandler) handleCopyFiles(files ...pathLangFile) {
-	for _, proc := range c.contentProcessors {
-		proc.processAssets(files)
-	}
+func (c *contentCaptureResultHandler) handleCopyFile(f pathLangFile) {
+	proc := c.getContentProcessor(f.Lang())
+	proc.processAsset(f)
 }
 
 func (s *Site) readAndProcessContent(filenames ...string) error {
+
 	ctx := context.Background()
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -1242,9 +1345,9 @@ func (s *Site) readAndProcessContent(filenames ...string) error {
 
 	contentProcessors := make(map[string]*siteContentProcessor)
 	var defaultContentProcessor *siteContentProcessor
-	sites := s.owner.langSite()
+	sites := s.h.langSite()
 	for k, v := range sites {
-		if v.Language.Disabled {
+		if v.language.Disabled {
 			continue
 		}
 		proc := newSiteContentProcessor(ctx, len(filenames) > 0, v)
@@ -1268,7 +1371,7 @@ func (s *Site) readAndProcessContent(filenames ...string) error {
 
 	if s.running() {
 		// Need to track changes.
-		bundleMap = s.owner.ContentChanges
+		bundleMap = s.h.ContentChanges
 		handler = &captureResultHandlerChain{handlers: []captureBundlesHandler{mainHandler, bundleMap}}
 
 	} else {
@@ -1291,28 +1394,11 @@ func (s *Site) readAndProcessContent(filenames ...string) error {
 	return err2
 }
 
-func (s *Site) buildSiteMeta() (err error) {
-	defer s.timerStep("build Site meta")
+func (s *Site) getMenusFromConfig() navigation.Menus {
 
-	if len(s.Pages) == 0 {
-		return
-	}
+	ret := navigation.Menus{}
 
-	s.assembleTaxonomies()
-
-	for _, p := range s.AllPages {
-		// this depends on taxonomies
-		p.setValuesForKind(s)
-	}
-
-	return
-}
-
-func (s *Site) getMenusFromConfig() Menus {
-
-	ret := Menus{}
-
-	if menus := s.Language.GetStringMap("menu"); menus != nil {
+	if menus := s.language.GetStringMap("menus"); menus != nil {
 		for name, menu := range menus {
 			m, err := cast.ToSliceE(menu)
 			if err != nil {
@@ -1322,20 +1408,21 @@ func (s *Site) getMenusFromConfig() Menus {
 				for _, entry := range m {
 					s.Log.DEBUG.Printf("found menu: %q, in site config\n", name)
 
-					menuEntry := MenuEntry{Menu: name}
+					menuEntry := navigation.MenuEntry{Menu: name}
 					ime, err := cast.ToStringMapE(entry)
 					if err != nil {
 						s.Log.ERROR.Printf("unable to process menus in site config\n")
 						s.Log.ERROR.Println(err)
 					}
 
-					menuEntry.marshallMap(ime)
-					menuEntry.URL = s.Info.createNodeMenuEntryURL(menuEntry.URL)
+					menuEntry.MarshallMap(ime)
+					// TODO(bep) clean up all of this
+					menuEntry.ConfiguredURL = s.Info.createNodeMenuEntryURL(menuEntry.ConfiguredURL)
 
 					if ret[name] == nil {
-						ret[name] = &Menu{}
+						ret[name] = navigation.Menu{}
 					}
-					*ret[name] = ret[name].add(&menuEntry)
+					ret[name] = ret[name].Add(&menuEntry)
 				}
 			}
 		}
@@ -1359,28 +1446,27 @@ func (s *SiteInfo) createNodeMenuEntryURL(in string) string {
 }
 
 func (s *Site) assembleMenus() {
-	s.Menus = Menus{}
+	s.menus = make(navigation.Menus)
 
 	type twoD struct {
 		MenuName, EntryName string
 	}
-	flat := map[twoD]*MenuEntry{}
-	children := map[twoD]Menu{}
+	flat := map[twoD]*navigation.MenuEntry{}
+	children := map[twoD]navigation.Menu{}
 
 	// add menu entries from config to flat hash
 	menuConfig := s.getMenusFromConfig()
 	for name, menu := range menuConfig {
-		for _, me := range *menu {
+		for _, me := range menu {
 			flat[twoD{name, me.KeyName()}] = me
 		}
 	}
 
 	sectionPagesMenu := s.Info.sectionPagesMenu
-	pages := s.Pages
 
 	if sectionPagesMenu != "" {
-		for _, p := range pages {
-			if p.Kind == KindSection {
+		for _, p := range s.workAllPages {
+			if p.Kind() == page.KindSection {
 				// From Hugo 0.22 we have nested sections, but until we get a
 				// feel of how that would work in this setting, let us keep
 				// this menu for the top level only.
@@ -1389,20 +1475,20 @@ func (s *Site) assembleMenus() {
 					continue
 				}
 
-				me := MenuEntry{Identifier: id,
+				me := navigation.MenuEntry{Identifier: id,
 					Name:   p.LinkTitle(),
-					Weight: p.Weight,
-					URL:    p.RelPermalink()}
+					Weight: p.Weight(),
+					Page:   p}
 				flat[twoD{sectionPagesMenu, me.KeyName()}] = &me
 			}
 		}
 	}
 
 	// Add menu entries provided by pages
-	for _, p := range pages {
-		for name, me := range p.Menus() {
+	for _, p := range s.workAllPages {
+		for name, me := range p.pageMenus.menus() {
 			if _, ok := flat[twoD{name, me.KeyName()}]; ok {
-				s.Log.ERROR.Printf("Two or more menu items have the same name/identifier in Menu %q: %q.\nRename or set an unique identifier.\n", name, me.KeyName())
+				s.SendError(p.wrapError(errors.Errorf("duplicate menu entry with identifier %q in menu %q", me.KeyName(), name)))
 				continue
 			}
 			flat[twoD{name, me.KeyName()}] = me
@@ -1412,7 +1498,7 @@ func (s *Site) assembleMenus() {
 	// Create Children Menus First
 	for _, e := range flat {
 		if e.Parent != "" {
-			children[twoD{e.Menu, e.Parent}] = children[twoD{e.Menu, e.Parent}].add(e)
+			children[twoD{e.Menu, e.Parent}] = children[twoD{e.Menu, e.Parent}].Add(e)
 		}
 	}
 
@@ -1421,7 +1507,7 @@ func (s *Site) assembleMenus() {
 		_, ok := flat[twoD{p.MenuName, p.EntryName}]
 		if !ok {
 			// if parent does not exist, create one without a URL
-			flat[twoD{p.MenuName, p.EntryName}] = &MenuEntry{Name: p.EntryName, URL: ""}
+			flat[twoD{p.MenuName, p.EntryName}] = &navigation.MenuEntry{Name: p.EntryName}
 		}
 		flat[twoD{p.MenuName, p.EntryName}].Children = childmenu
 	}
@@ -1429,185 +1515,138 @@ func (s *Site) assembleMenus() {
 	// Assembling Top Level of Tree
 	for menu, e := range flat {
 		if e.Parent == "" {
-			_, ok := s.Menus[menu.MenuName]
+			_, ok := s.menus[menu.MenuName]
 			if !ok {
-				s.Menus[menu.MenuName] = &Menu{}
+				s.menus[menu.MenuName] = navigation.Menu{}
 			}
-			*s.Menus[menu.MenuName] = s.Menus[menu.MenuName].add(e)
+			s.menus[menu.MenuName] = s.menus[menu.MenuName].Add(e)
 		}
 	}
 }
 
-func (s *Site) getTaxonomyKey(key string) string {
-	if s.Info.preserveTaxonomyNames {
-		// Keep as is
-		return key
+// get any lanaguagecode to prefix the target file path with.
+func (s *Site) getLanguageTargetPathLang(alwaysInSubDir bool) string {
+	if s.h.IsMultihost() {
+		return s.Language().Lang
 	}
-	return s.PathSpec.MakePathSanitized(key)
+
+	return s.getLanguagePermalinkLang(alwaysInSubDir)
 }
 
-// We need to create the top level taxonomy early in the build process
-// to be able to determine the page Kind correctly.
-func (s *Site) createTaxonomiesEntries() {
+// get any lanaguagecode to prefix the relative permalink with.
+func (s *Site) getLanguagePermalinkLang(alwaysInSubDir bool) string {
+
+	if !s.Info.IsMultiLingual() || s.h.IsMultihost() {
+		return ""
+	}
+
+	if alwaysInSubDir {
+		return s.Language().Lang
+	}
+
+	isDefault := s.Language().Lang == s.multilingual().DefaultLang.Lang
+
+	if !isDefault || s.Info.defaultContentLanguageInSubdir {
+		return s.Language().Lang
+	}
+
+	return ""
+}
+
+func (s *Site) getTaxonomyKey(key string) string {
+	if s.PathSpec.DisablePathToLower {
+		return s.PathSpec.MakePath(key)
+	}
+	return strings.ToLower(s.PathSpec.MakePath(key))
+}
+
+func (s *Site) assembleTaxonomies() error {
 	s.Taxonomies = make(TaxonomyList)
-	taxonomies := s.Language.GetStringMapString("taxonomies")
+	taxonomies := s.siteCfg.taxonomiesConfig
 	for _, plural := range taxonomies {
 		s.Taxonomies[plural] = make(Taxonomy)
 	}
-}
 
-func (s *Site) assembleTaxonomies() {
-	s.taxonomiesPluralSingular = make(map[string]string)
-	s.taxonomiesOrigKey = make(map[string]string)
-
-	taxonomies := s.Language.GetStringMapString("taxonomies")
+	s.taxonomyNodes = &taxonomyNodeInfos{
+		m:      make(map[string]*taxonomyNodeInfo),
+		getKey: s.getTaxonomyKey,
+	}
 
 	s.Log.INFO.Printf("found taxonomies: %#v\n", taxonomies)
 
 	for singular, plural := range taxonomies {
-		s.taxonomiesPluralSingular[plural] = singular
+		parent := s.taxonomyNodes.GetOrCreate(plural, "")
+		parent.singular = singular
 
-		for _, p := range s.Pages {
-			vals := p.getParam(plural, !s.Info.preserveTaxonomyNames)
+		addTaxonomy := func(plural, term string, weight int, p page.Page) {
+			key := s.getTaxonomyKey(term)
 
-			w := p.getParamToLower(plural + "_weight")
+			n := s.taxonomyNodes.GetOrCreate(plural, term)
+			n.parent = parent
+
+			w := page.NewWeightedPage(weight, p, n.owner)
+
+			s.Taxonomies[plural].add(key, w)
+
+			n.UpdateFromPage(w.Page)
+			parent.UpdateFromPage(w.Page)
+		}
+
+		for _, p := range s.workAllPages {
+			vals := getParam(p, plural, false)
+
+			w := getParamToLower(p, plural+"_weight")
 			weight, err := cast.ToIntE(w)
 			if err != nil {
-				s.Log.ERROR.Printf("Unable to convert taxonomy weight %#v to int for %s", w, p.Source.File.Path())
+				s.Log.ERROR.Printf("Unable to convert taxonomy weight %#v to int for %q", w, p.pathOrTitle())
 				// weight will equal zero, so let the flow continue
 			}
 
 			if vals != nil {
 				if v, ok := vals.([]string); ok {
 					for _, idx := range v {
-						x := WeightedPage{weight, p}
-						s.Taxonomies[plural].add(s.getTaxonomyKey(idx), x)
-						if s.Info.preserveTaxonomyNames {
-							// Need to track the original
-							s.taxonomiesOrigKey[fmt.Sprintf("%s-%s", plural, s.PathSpec.MakePathSanitized(idx))] = idx
-						}
+						addTaxonomy(plural, idx, weight, p)
 					}
 				} else if v, ok := vals.(string); ok {
-					x := WeightedPage{weight, p}
-					s.Taxonomies[plural].add(s.getTaxonomyKey(v), x)
-					if s.Info.preserveTaxonomyNames {
-						// Need to track the original
-						s.taxonomiesOrigKey[fmt.Sprintf("%s-%s", plural, s.PathSpec.MakePathSanitized(v))] = v
-					}
+					addTaxonomy(plural, v, weight, p)
 				} else {
-					s.Log.ERROR.Printf("Invalid %s in %s\n", plural, p.File.Path())
+					s.Log.ERROR.Printf("Invalid %s in %q\n", plural, p.pathOrTitle())
 				}
 			}
 		}
+
 		for k := range s.Taxonomies[plural] {
 			s.Taxonomies[plural][k].Sort()
 		}
 	}
 
-	s.Info.Taxonomies = s.Taxonomies
+	return nil
 }
 
 // Prepare site for a new full build.
 func (s *Site) resetBuildState() {
-
-	s.relatedDocsHandler = newSearchIndexHandler(s.relatedDocsHandler.cfg)
+	s.relatedDocsHandler = s.relatedDocsHandler.Clone()
 	s.PageCollections = newPageCollectionsFromPages(s.rawAllPages)
-	// TODO(bep) get rid of this double
-	s.Info.PageCollections = s.PageCollections
-
-	s.draftCount = 0
-	s.futureCount = 0
-
-	s.expiredCount = 0
+	s.buildStats = &buildStats{}
+	s.init.Reset()
 
 	for _, p := range s.rawAllPages {
-		p.subSections = Pages{}
+		p.pagePages = &pagePages{}
+		p.subSections = page.Pages{}
 		p.parent = nil
-		p.scratch = maps.NewScratch()
-		p.mainPageOutput = nil
+		p.Scratcher = maps.NewScratcher()
 	}
 }
 
-func (s *Site) kindFromSections(sections []string) string {
-	if len(sections) == 0 {
-		return KindSection
-	}
-
-	if _, isTaxonomy := s.Taxonomies[sections[0]]; isTaxonomy {
-		if len(sections) == 1 {
-			return KindTaxonomyTerm
-		}
-		return KindTaxonomy
-	}
-	return KindSection
-}
-
-func (s *Site) layouts(p *PageOutput) ([]string, error) {
-	return s.layoutHandler.For(p.layoutDescriptor, p.outputFormat)
-}
-
-func (s *Site) preparePages() error {
+func (s *Site) errorCollator(results <-chan error, errs chan<- error) {
 	var errors []error
-
-	for _, p := range s.Pages {
-		if err := p.prepareLayouts(); err != nil {
-			errors = append(errors, err)
-		}
-		if err := p.prepareData(s); err != nil {
-			errors = append(errors, err)
-		}
+	for e := range results {
+		errors = append(errors, e)
 	}
 
-	if len(errors) != 0 {
-		return fmt.Errorf("Prepare pages failed: %.100q…", errors)
-	}
+	errs <- s.h.pickOneAndLogTheRest(errors)
 
-	return nil
-}
-
-func errorCollator(results <-chan error, errs chan<- error) {
-	errMsgs := []string{}
-	for err := range results {
-		if err != nil {
-			errMsgs = append(errMsgs, err.Error())
-		}
-	}
-	if len(errMsgs) == 0 {
-		errs <- nil
-	} else {
-		errs <- errors.New(strings.Join(errMsgs, "\n"))
-	}
 	close(errs)
-}
-
-func (s *Site) appendThemeTemplates(in []string) []string {
-	if !s.PathSpec.ThemeSet() {
-		return in
-	}
-
-	out := []string{}
-	// First place all non internal templates
-	for _, t := range in {
-		if !strings.HasPrefix(t, "_internal/") {
-			out = append(out, t)
-		}
-	}
-
-	// Then place theme templates with the same names
-	for _, t := range in {
-		if !strings.HasPrefix(t, "_internal/") {
-			out = append(out, "theme/"+t)
-		}
-	}
-
-	// Lastly place internal templates
-	for _, t := range in {
-		if strings.HasPrefix(t, "_internal/") {
-			out = append(out, t)
-		}
-	}
-	return out
-
 }
 
 // GetPage looks up a page of a given type for the given ref.
@@ -1617,25 +1656,17 @@ func (s *Site) appendThemeTemplates(in []string) []string {
 // When we now remove the Kind from this API, we need to make the transition as painless
 // as possible for existing sites. Most sites will use {{ .Site.GetPage "section" "my/section" }},
 // i.e. 2 arguments, so we test for that.
-func (s *SiteInfo) GetPage(ref ...string) (*Page, error) {
-	return s.getPageOldVersion(ref...)
-}
+func (s *SiteInfo) GetPage(ref ...string) (page.Page, error) {
+	p, err := s.s.getPageOldVersion(ref...)
 
-func (s *Site) permalinkForOutputFormat(link string, f output.Format) (string, error) {
-	var (
-		baseURL string
-		err     error
-	)
-
-	if f.Protocol != "" {
-		baseURL, err = s.PathSpec.BaseURL.WithProtocol(f.Protocol)
-		if err != nil {
-			return "", err
-		}
-	} else {
-		baseURL = s.PathSpec.BaseURL.String()
+	if p == nil {
+		// The nil struct has meaning in some situations, mostly to avoid breaking
+		// existing sites doing $nilpage.IsDescendant($p), which will always return
+		// false.
+		p = page.NilPage
 	}
-	return s.PathSpec.PermalinkForBaseURL(link, baseURL), nil
+
+	return p, err
 }
 
 func (s *Site) permalink(link string) string {
@@ -1647,11 +1678,9 @@ func (s *Site) renderAndWriteXML(statCounter *uint64, name string, targetPath st
 	s.Log.DEBUG.Printf("Render XML for %q to %q", name, targetPath)
 	renderBuffer := bp.GetBuffer()
 	defer bp.PutBuffer(renderBuffer)
-	renderBuffer.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>\n")
 
-	if err := s.renderForLayouts(name, d, renderBuffer, layouts...); err != nil {
-		helpers.DistinctWarnLog.Println(err)
-		return nil
+	if err := s.renderForLayouts(name, "", d, renderBuffer, layouts...); err != nil {
+		return err
 	}
 
 	var path string
@@ -1679,26 +1708,28 @@ func (s *Site) renderAndWriteXML(statCounter *uint64, name string, targetPath st
 
 }
 
-func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath string, p *PageOutput, layouts ...string) error {
+func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath string, p *pageState, layouts ...string) error {
 	renderBuffer := bp.GetBuffer()
 	defer bp.PutBuffer(renderBuffer)
 
-	if err := s.renderForLayouts(p.Kind, p, renderBuffer, layouts...); err != nil {
-		helpers.DistinctWarnLog.Println(err)
-		return nil
+	of := p.outputFormat()
+
+	if err := s.renderForLayouts(p.Kind(), of.Name, p, renderBuffer, layouts...); err != nil {
+		return err
 	}
 
 	if renderBuffer.Len() == 0 {
 		return nil
 	}
 
-	isHTML := p.outputFormat.IsHTML
+	isHTML := of.IsHTML
+	isRSS := of.Name == "RSS"
 
 	var path string
 
 	if s.Info.relativeURLs {
 		path = helpers.GetDottedRelativePath(targetPath)
-	} else if s.Info.canonifyURLs {
+	} else if isRSS || s.Info.canonifyURLs {
 		url := s.PathSpec.BaseURL.String()
 		if !strings.HasSuffix(url, "/") {
 			url += "/"
@@ -1710,10 +1741,13 @@ func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath s
 		Src:          renderBuffer,
 		TargetPath:   targetPath,
 		StatCounter:  statCounter,
-		OutputFormat: p.outputFormat,
+		OutputFormat: p.outputFormat(),
 	}
 
-	if isHTML {
+	if isRSS {
+		// Always canonify URLs in RSS
+		pd.AbsURLPath = path
+	} else if isHTML {
 		if s.Info.relativeURLs || s.Info.canonifyURLs {
 			pd.AbsURLPath = path
 		}
@@ -1732,49 +1766,41 @@ func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath s
 	return s.publisher.Publish(pd)
 }
 
-func (s *Site) renderForLayouts(name string, d interface{}, w io.Writer, layouts ...string) (err error) {
-	var templ tpl.Template
+var infoOnMissingLayout = map[string]bool{
+	// The 404 layout is very much optional in Hugo, but we do look for it.
+	"404": true,
+}
 
-	defer func() {
-		if r := recover(); r != nil {
-			templName := ""
-			if templ != nil {
-				templName = templ.Name()
-			}
-			s.DistinctErrorLog.Printf("Failed to render %q: %s", templName, r)
-			s.DistinctErrorLog.Printf("Stack Trace:\n%s", stackTrace(1200))
-
-			// TOD(bep) we really need to fix this. Also see below.
-			if !s.running() && !testMode {
-				os.Exit(-1)
-			}
-		}
-	}()
-
-	templ = s.findFirstTemplate(layouts...)
+func (s *Site) renderForLayouts(name, outputFormat string, d interface{}, w io.Writer, layouts ...string) (err error) {
+	templ := s.findFirstTemplate(layouts...)
 	if templ == nil {
-		return fmt.Errorf("[%s] Unable to locate layout for %q: %s\n", s.Language.Lang, name, layouts)
+		log := s.Log.WARN
+		if infoOnMissingLayout[name] {
+			log = s.Log.INFO
+		}
+
+		errMsg := "You should create a template file which matches Hugo Layouts Lookup Rules for this combination."
+		var args []interface{}
+		msg := "found no layout file for"
+		if outputFormat != "" {
+			msg += " %q"
+			args = append(args, outputFormat)
+		}
+		if name != "" {
+			msg += " for %q"
+			args = append(args, name)
+		}
+
+		msg += ": " + errMsg
+
+		log.Printf(msg, args...)
+
+		return nil
 	}
 
 	if err = templ.Execute(w, d); err != nil {
-		// Behavior here should be dependent on if running in server or watch mode.
-		if p, ok := d.(*PageOutput); ok {
-			if p.File != nil {
-				s.DistinctErrorLog.Printf("Error while rendering %q in %q: %s", name, p.File.Dir(), err)
-			} else {
-				s.DistinctErrorLog.Printf("Error while rendering %q: %s", name, err)
-			}
-		} else {
-			s.DistinctErrorLog.Printf("Error while rendering %q: %s", name, err)
-		}
-		if !s.running() && !testMode {
-			// TODO(bep) check if this can be propagated
-			os.Exit(-1)
-		} else if testMode {
-			return
-		}
+		return _errors.Wrapf(err, "render of %q failed", name)
 	}
-
 	return
 }
 
@@ -1793,69 +1819,84 @@ func (s *Site) publish(statCounter *uint64, path string, r io.Reader) (err error
 	return helpers.WriteToDisk(filepath.Clean(path), r, s.BaseFs.PublishFs)
 }
 
-func getGoMaxProcs() int {
-	if gmp := os.Getenv("GOMAXPROCS"); gmp != "" {
-		if p, err := strconv.Atoi(gmp); err != nil {
-			return p
+func (s *Site) kindFromFileInfoOrSections(fi *fileInfo, sections []string) string {
+	if fi.TranslationBaseName() == "_index" {
+		if fi.Dir() == "" {
+			return page.KindHome
 		}
+
+		return s.kindFromSections(sections)
+
 	}
-	return 1
+	return page.KindPage
 }
 
-func (s *Site) newNodePage(typ string, sections ...string) *Page {
-	p := &Page{
-		language:        s.Language,
-		pageInit:        &pageInit{},
-		pageContentInit: &pageContentInit{},
-		Kind:            typ,
-		Source:          Source{File: &source.FileInfo{}},
-		data:            make(map[string]interface{}),
-		Site:            &s.Info,
-		sections:        sections,
-		s:               s}
-
-	p.outputFormats = p.s.outputFormats[p.Kind]
-
-	return p
-
-}
-
-func (s *Site) newHomePage() *Page {
-	p := s.newNodePage(KindHome)
-	p.title = s.Info.Title
-	pages := Pages{}
-	p.data["Pages"] = pages
-	p.Pages = pages
-	return p
-}
-
-func (s *Site) newTaxonomyPage(plural, key string) *Page {
-
-	p := s.newNodePage(KindTaxonomy, plural, key)
-
-	if s.Info.preserveTaxonomyNames {
-		p.title = key
-	} else {
-		p.title = strings.Replace(s.titleFunc(key), "-", " ", -1)
+func (s *Site) kindFromSections(sections []string) string {
+	if len(sections) == 0 || len(s.siteCfg.taxonomiesConfig) == 0 {
+		return page.KindSection
 	}
 
-	return p
-}
+	sectionPath := path.Join(sections...)
 
-func (s *Site) newSectionPage(name string) *Page {
-	p := s.newNodePage(KindSection, name)
+	for _, plural := range s.siteCfg.taxonomiesConfig {
+		if plural == sectionPath {
+			return page.KindTaxonomyTerm
+		}
 
-	sectionName := helpers.FirstUpper(name)
-	if s.Cfg.GetBool("pluralizeListTitles") {
-		p.title = inflect.Pluralize(sectionName)
-	} else {
-		p.title = sectionName
+		if strings.HasPrefix(sectionPath, plural) {
+			return page.KindTaxonomy
+		}
+
 	}
+
+	return page.KindSection
+}
+
+func (s *Site) newTaxonomyPage(title string, sections ...string) *pageState {
+	p, err := newPageFromMeta(&pageMeta{
+		title:    title,
+		s:        s,
+		kind:     page.KindTaxonomy,
+		sections: sections,
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	return p
+
+}
+
+func (s *Site) newPage(kind string, sections ...string) *pageState {
+	p, err := newPageFromMeta(&pageMeta{
+		s:        s,
+		kind:     kind,
+		sections: sections,
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
 	return p
 }
 
-func (s *Site) newTaxonomyTermsPage(plural string) *Page {
-	p := s.newNodePage(KindTaxonomyTerm, plural)
-	p.title = s.titleFunc(plural)
-	return p
+func (s *Site) shouldBuild(p page.Page) bool {
+	return shouldBuild(s.BuildFuture, s.BuildExpired,
+		s.BuildDrafts, p.Draft(), p.PublishDate(), p.ExpiryDate())
+}
+
+func shouldBuild(buildFuture bool, buildExpired bool, buildDrafts bool, Draft bool,
+	publishDate time.Time, expiryDate time.Time) bool {
+	if !(buildDrafts || !Draft) {
+		return false
+	}
+	if !buildFuture && !publishDate.IsZero() && publishDate.After(time.Now()) {
+		return false
+	}
+	if !buildExpired && !expiryDate.IsZero() && expiryDate.Before(time.Now()) {
+		return false
+	}
+	return true
 }

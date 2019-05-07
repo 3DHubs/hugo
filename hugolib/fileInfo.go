@@ -54,7 +54,17 @@ func (fi *fileInfo) Lang() string {
 }
 
 func (fi *fileInfo) Filename() string {
+	if fi == nil || fi.basePather == nil {
+		return ""
+	}
 	return fi.basePather.Filename()
+}
+
+func (fi *fileInfo) String() string {
+	if fi == nil || fi.ReadableFile == nil {
+		return ""
+	}
+	return fi.Path()
 }
 
 func (fi *fileInfo) isOwner() bool {

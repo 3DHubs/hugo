@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,13 @@ package embedded
 // EmbeddedTemplates represents all embedded templates.
 var EmbeddedTemplates = [][2]string{
 	{`_default/robots.txt`, `User-agent: *`},
-	{`_default/rss.xml`, `<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	{`_default/rss.xml`, `{{- $pages := .Data.Pages -}}
+{{- $limit := .Site.Config.Services.RSS.Limit -}}
+{{- if ge $limit 1 -}}
+{{- $pages = $pages | first $limit -}}
+{{- end -}}
+{{- printf "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>" | safeHTML }}
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>{{ if eq  .Title  .Site.Title }}{{ .Site.Title }}{{ else }}{{ with .Title }}{{.}} on {{ end }}{{ .Site.Title }}{{ end }}</title>
     <link>{{ .Permalink }}</link>
@@ -33,7 +39,7 @@ var EmbeddedTemplates = [][2]string{
     {{ with .OutputFormats.Get "RSS" }}
 	{{ printf "<atom:link href=%q rel=\"self\" type=%q />" .Permalink .MediaType | safeHTML }}
     {{ end }}
-    {{ range .Data.Pages }}
+    {{ range $pages }}
     <item>
       <title>{{ .Title }}</title>
       <link>{{ .Permalink }}</link>
@@ -45,7 +51,8 @@ var EmbeddedTemplates = [][2]string{
     {{ end }}
   </channel>
 </rss>`},
-	{`_default/sitemap.xml`, `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+	{`_default/sitemap.xml`, `{{ printf "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>" | safeHTML }}
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   {{ range .Data.Pages }}
   <url>
@@ -55,18 +62,19 @@ var EmbeddedTemplates = [][2]string{
     <priority>{{ .Sitemap.Priority }}</priority>{{ end }}{{ if .IsTranslated }}{{ range .Translations }}
     <xhtml:link
                 rel="alternate"
-                hreflang="{{ .Lang }}"
+                hreflang="{{ .Language.Lang }}"
                 href="{{ .Permalink }}"
                 />{{ end }}
     <xhtml:link
                 rel="alternate"
-                hreflang="{{ .Lang }}"
+                hreflang="{{ .Language.Lang }}"
                 href="{{ .Permalink }}"
                 />{{ end }}
   </url>
   {{ end }}
 </urlset>`},
-	{`_default/sitemapindex.xml`, `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+	{`_default/sitemapindex.xml`, `{{ printf "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>" | safeHTML }}
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 	{{ range . }}
 	<sitemap>
 	   	<loc>{{ .SitemapAbsURL }}</loc>
@@ -77,14 +85,14 @@ var EmbeddedTemplates = [][2]string{
 	{{ end }}
 </sitemapindex>
 `},
-	{`disqus.html`, `{{- $pc := .Page.Site.Config.Privacy.Disqus -}}
+	{`disqus.html`, `{{- $pc := .Site.Config.Privacy.Disqus -}}
 {{- if not $pc.Disable -}}
 {{ if .Site.DisqusShortname }}<div id="disqus_thread"></div>
 <script type="application/javascript">
     var disqus_config = function () {
-    {{with .GetParam "disqus_identifier" }}this.page.identifier = '{{ . }}';{{end}}
-    {{with .GetParam "disqus_title" }}this.page.title = '{{ . }}';{{end}}
-    {{with .GetParam "disqus_url" }}this.page.url = '{{ . | html  }}';{{end}}
+    {{with .Params.disqus_identifier }}this.page.identifier = '{{ . }}';{{end}}
+    {{with .Params.disqus_title }}this.page.title = '{{ . }}';{{end}}
+    {{with .Params.disqus_url }}this.page.url = '{{ . | html  }}';{{end}}
     };
     (function() {
         if (["localhost", "127.0.0.1"].indexOf(window.location.hostname) != -1) {
@@ -175,7 +183,7 @@ if (!doNotTrack) {
 <meta property="og:description" content="{{ with .Description }}{{ . }}{{ else }}{{if .IsPage}}{{ .Summary }}{{ else }}{{ with .Site.Params.description }}{{ . }}{{ end }}{{ end }}{{ end }}" />
 <meta property="og:type" content="{{ if .IsPage }}article{{ else }}website{{ end }}" />
 <meta property="og:url" content="{{ .Permalink }}" />
-{{- with .Params.images }}{{ range first 6 . }}
+{{ with $.Param "images" }}{{ range first 6 . }}
 <meta property="og:image" content="{{ . | absURL }}" />
 {{ end }}{{ end }}
 
@@ -231,21 +239,22 @@ if (!doNotTrack) {
     <li class="page-item{{ if not $pag.HasPrev }} disabled{{ end }}">
     <a href="{{ if $pag.HasPrev }}{{ $pag.Prev.URL }}{{ end }}" class="page-link" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a>
     </li>
-    {{ $.Scratch.Set "__paginator.ellipsed" false }}
+    {{ $ellipsed := false }}
+    {{ $shouldEllipse := false }}
     {{ range $pag.Pagers }}
     {{ $right := sub .TotalPages .PageNumber }}
     {{ $showNumber := or (le .PageNumber 3) (eq $right 0) }}
     {{ $showNumber := or $showNumber (and (gt .PageNumber (sub $pag.PageNumber 2)) (lt .PageNumber (add $pag.PageNumber 2)))  }}
     {{ if $showNumber }}
-        {{ $.Scratch.Set "__paginator.ellipsed" false }}
-        {{ $.Scratch.Set "__paginator.shouldEllipse" false }}
+        {{ $ellipsed = false }}
+        {{ $shouldEllipse = false }}
     {{ else }}
-        {{ $.Scratch.Set "__paginator.shouldEllipse" (not ($.Scratch.Get "__paginator.ellipsed") ) }}
-        {{ $.Scratch.Set "__paginator.ellipsed" true }}
+        {{ $shouldEllipse = not $ellipsed }}
+        {{ $ellipsed = true }}
     {{ end }}
     {{ if $showNumber }}
     <li class="page-item{{ if eq . $pag }} active{{ end }}"><a class="page-link" href="{{ .URL }}">{{ .PageNumber }}</a></li>
-    {{ else if ($.Scratch.Get "__paginator.shouldEllipse") }}
+    {{ else if $shouldEllipse }}
     <li class="page-item disabled"><span aria-hidden="true">&nbsp;&hellip;&nbsp;</span></li>
     {{ end }}
     {{ end }}
@@ -265,7 +274,7 @@ if (!doNotTrack) {
 
 {{if .IsPage}}{{ $ISO8601 := "2006-01-02T15:04:05-07:00" }}{{ if not .PublishDate.IsZero }}
 <meta itemprop="datePublished" content="{{ .PublishDate.Format $ISO8601 | safeHTML }}" />{{ end }}
-{{ if not .Date.IsZero }}<meta itemprop="dateModified" content="{{ .Date.Format $ISO8601 | safeHTML }}" />{{ end }}
+{{ if not .Lastmod.IsZero }}<meta itemprop="dateModified" content="{{ .Lastmod.Format $ISO8601 | safeHTML }}" />{{ end }}
 <meta itemprop="wordCount" content="{{ .WordCount }}">
 {{ with .Params.images }}{{ range first 6 . }}
   <meta itemprop="image" content="{{ . | absURL }}">
@@ -328,7 +337,7 @@ if (!doNotTrack) {
             {{- end -}}
             {{- if or (.Get "caption") (.Get "attr") -}}<p>
                 {{- .Get "caption" | markdownify -}}
-                {{- with .Get "attrlink" -}}
+                {{- with .Get "attrlink" }}
                     <a href="{{ . }}">
                 {{- end -}}
                 {{- .Get "attr" | markdownify -}}
@@ -398,8 +407,12 @@ if (!doNotTrack) {
 </style>
 {{ end }}
 {{ end }}`},
-	{`shortcodes/ref.html`, `{{ ref .Page .Params }}`},
-	{`shortcodes/relref.html`, `{{ relref .Page .Params }}`},
+	{`shortcodes/param.html`, `{{- $name := (.Get 0) -}}
+{{- with $name -}}
+{{- with ($.Page.Param .) }}{{ . }}{{ else }}{{ errorf "Param %q not found: %s" $name $.Position }}{{ end -}}
+{{- else }}{{ errorf "Missing param key: %s" $.Position }}{{ end -}}`},
+	{`shortcodes/ref.html`, `{{ ref . .Params }}`},
+	{`shortcodes/relref.html`, `{{ relref . .Params }}`},
 	{`shortcodes/twitter.html`, `{{- $pc := .Page.Site.Config.Privacy.Twitter -}}
 {{- if not $pc.Disable -}}
 {{- if $pc.Simple -}}

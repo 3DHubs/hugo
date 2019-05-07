@@ -15,6 +15,7 @@ categories: [content management]
 keywords: [markdown,content,shortcodes]
 draft: false
 aliases: [/extras/shortcodes/]
+testparam: "Hugo Rocks!"
 toc: true
 ---
 
@@ -52,11 +53,14 @@ The examples above use two different delimiters, the difference being the `%` ch
 
 ### Shortcodes with Markdown
 
-The `%` character indicates that the shortcode's inner content---called in the [shortcode template][sctemps] with the [`.Inner` variable][scvars]---needs further processing by the page's rendering processor (i.e. markdown via Blackfriday). In the following example, Blackfriday would convert `**World**` to `<strong>World</strong>`:
+In Hugo `0.55` we changed how the `%` delimiter works. Shortcodes using the `%` as the outer-most delimiter will now be fully rendered when sent to the content renderer (e.g. Blackfriday for Markdown), meaning they can be part of the generated table of contents, footnotes, etc.
+
+If you want the old behavior, you can put the following line in the start of your shortcode template:
 
 ```
-{{%/* myshortcode */%}}Hello **World!**{{%/* /myshortcode */%}}
+{{ $_hugo_config := `{ "version": 1 }` }}
 ```
+
 
 ### Shortcodes Without Markdown
 
@@ -240,6 +244,24 @@ Using the preceding `instagram` with `hidecaption` example above, the following 
 {{< instagram BWNjjyYFxVx hidecaption >}}
 
 
+### `param`
+
+Gets a value from the current `Page's` params set in front matter, with a fall back to the site param value. It will log an `ERROR` if the param with the given key could not be found in either.
+
+```bash
+{{</* param testparam */>}}
+```
+
+Since `testparam` is a param defined in front matter of this page with the value `Hugo Rocks!`, the above will print:
+
+{{< param testparam >}}
+
+To access deeply nested params, use "dot syntax", e.g:
+
+```bash
+{{</* param "my.nested.param" */>}}
+```
+
 ### `ref` and `relref`
 
 These shortcodes will look up the pages by their relative path (e.g., `blog/post.md`) or their logical name (`post.md`) and return the permalink (`ref`) or relative permalink (`relref`) for the found page.
@@ -353,7 +375,7 @@ Copy the YouTube video ID that follows `v=` in the video's URL and pass it to th
 {{</* youtube w7Ft2ymGmfc */>}}
 {{< /code >}}
 
-Furthermore, you can automatically start playback of the embedded video by setting the `autoplay` parameter to `true`. Remember that you can't mix named an unnamed parameters, so you'll need to assign the yet unnamed video id to the parameter `id`:
+Furthermore, you can automatically start playback of the embedded video by setting the `autoplay` parameter to `true`. Remember that you can't mix named and unnamed parameters, so you'll need to assign the yet unnamed video id to the parameter `id`:
 
 
 {{< code file="example-youtube-input-with-autoplay.md" >}}

@@ -170,34 +170,3 @@ func TestTestRemarshalError(t *testing.T) {
 	assert.Error(err)
 
 }
-
-func TestRemarshalDetectFormat(t *testing.T) {
-	t.Parallel()
-	assert := require.New(t)
-
-	for i, test := range []struct {
-		data   string
-		expect interface{}
-	}{
-		{`foo = "bar"`, "toml"},
-		{`   foo = "bar"`, "toml"},
-		{`foo="bar"`, "toml"},
-		{`foo: "bar"`, "yaml"},
-		{`foo:"bar"`, "yaml"},
-		{`{ "foo": "bar"`, "json"},
-		{`asdfasdf`, false},
-		{``, false},
-	} {
-		errMsg := fmt.Sprintf("[%d] %s", i, test.data)
-
-		result, err := detectFormat(test.data)
-
-		if b, ok := test.expect.(bool); ok && !b {
-			assert.Error(err, errMsg)
-			continue
-		}
-
-		assert.NoError(err, errMsg)
-		assert.Equal(test.expect, result, errMsg)
-	}
-}

@@ -1,4 +1,4 @@
-hugo
+/hugo
 docs/public*
 /.idea
 hugo.exe
@@ -19,3 +19,6 @@ dock.sh
 
 GoBuilds
 dist
+
+
+vendor

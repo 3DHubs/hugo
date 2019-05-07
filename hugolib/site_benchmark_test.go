@@ -166,7 +166,7 @@ look like:
   * the other one
 
 Note that --- not considering the asterisk --- the actual text
-content starts at 4-columns in.
+content starts at 4-columns in :smile:.
 
 > Block quotes are
 > written like so.
@@ -195,8 +195,7 @@ tags = %s
 
 	pageTemplateYAML := `---
 title: "%s"
-tags:
-%s
+tags: %s
 ---
 %s
 
@@ -207,6 +206,7 @@ baseURL = "http://example.com/blog"
 
 paginate = 10
 defaultContentLanguage = "en"
+enableEmoji = true
 
 [outputs]
 home = [ "HTML" ]
@@ -254,11 +254,9 @@ weight = %d
 		tags[i] = fmt.Sprintf("Hugo %d", i+1)
 	}
 
-	var tagsStr string
-
 	if cfg.Shortcodes {
 		contentPagesContent = [3]string{
-			someMarkdownWithShortCode,
+			someMarkdown,
 			strings.Repeat(someMarkdownWithShortCode, 2),
 			strings.Repeat(someMarkdownWithShortCode, 3),
 		}
@@ -301,6 +299,8 @@ weight = %d
 						tagsSlice = tags[tagsStart : tagsStart+cfg.TagsPerPage]
 					}
 
+					var tagsStr string
+
 					if cfg.Frontmatter == "TOML" {
 						pageTemplate = pageTemplateTOML
 						tagsStr = "[]"
@@ -320,9 +320,11 @@ weight = %d
 					contentFilename := fmt.Sprintf("page%d%s.md", j, fileLangCodeID)
 
 					writeSource(b, fs, filepath.Join("content", fmt.Sprintf("sect%d", i), contentFilename), content)
+
 				}
 
 				content := fmt.Sprintf(pageTemplate, fmt.Sprintf("Section %d", i), "[]", contentPagesContent[rand.Intn(3)])
+
 				indexContentFilename := fmt.Sprintf("_index%s.md", fileLangCodeID)
 				writeSource(b, fs, filepath.Join("content", fmt.Sprintf("sect%d", i), indexContentFilename), content)
 			}

@@ -1,4 +1,4 @@
-// Copyright 2017-present The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ package output
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/gohugoio/hugo/media"
@@ -42,6 +43,7 @@ func TestDefaultTypes(t *testing.T) {
 	require.Empty(t, CSVFormat.Protocol)
 	require.True(t, CSVFormat.IsPlainText)
 	require.False(t, CSVFormat.IsHTML)
+	require.False(t, CSVFormat.Permalinkable)
 
 	require.Equal(t, "HTML", HTMLFormat.Name)
 	require.Equal(t, media.HTMLType, HTMLFormat.MediaType)
@@ -49,6 +51,7 @@ func TestDefaultTypes(t *testing.T) {
 	require.Empty(t, HTMLFormat.Protocol)
 	require.False(t, HTMLFormat.IsPlainText)
 	require.True(t, HTMLFormat.IsHTML)
+	require.True(t, AMPFormat.Permalinkable)
 
 	require.Equal(t, "AMP", AMPFormat.Name)
 	require.Equal(t, media.HTMLType, AMPFormat.MediaType)
@@ -56,6 +59,7 @@ func TestDefaultTypes(t *testing.T) {
 	require.Empty(t, AMPFormat.Protocol)
 	require.False(t, AMPFormat.IsPlainText)
 	require.True(t, AMPFormat.IsHTML)
+	require.True(t, AMPFormat.Permalinkable)
 
 	require.Equal(t, "RSS", RSSFormat.Name)
 	require.Equal(t, media.RSSType, RSSFormat.MediaType)
@@ -221,4 +225,26 @@ func TestDecodeFormats(t *testing.T) {
 			test.assert(t, test.name, result)
 		}
 	}
+}
+
+func TestSort(t *testing.T) {
+	assert := require.New(t)
+	assert.Equal("HTML", DefaultFormats[0].Name)
+	assert.Equal("AMP", DefaultFormats[1].Name)
+
+	json := JSONFormat
+	json.Weight = 1
+
+	formats := Formats{
+		AMPFormat,
+		HTMLFormat,
+		json,
+	}
+
+	sort.Sort(formats)
+
+	assert.Equal("JSON", formats[0].Name)
+	assert.Equal("HTML", formats[1].Name)
+	assert.Equal("AMP", formats[2].Name)
+
 }

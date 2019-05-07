@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,9 @@ package create
 
 import (
 	"bytes"
-	"fmt"
+
+	"github.com/pkg/errors"
+
 	"io"
 	"os"
 	"os/exec"
@@ -48,7 +50,7 @@ func NewContent(
 
 	if isDir {
 
-		langFs := hugofs.NewLanguageFs(s.Language.Lang, sites.LanguageSet(), archetypeFs)
+		langFs := hugofs.NewLanguageFs(s.Language().Lang, sites.LanguageSet(), archetypeFs)
 
 		cm, err := mapArcheTypeDir(ps, langFs, archetypeFilename)
 		if err != nil {
@@ -69,6 +71,7 @@ func NewContent(
 	siteUsed := false
 
 	if archetypeFilename != "" {
+
 		var err error
 		siteUsed, err = usesSiteVar(archetypeFs, archetypeFilename)
 		if err != nil {
@@ -110,7 +113,7 @@ func NewContent(
 
 func targetSite(sites *hugolib.HugoSites, fi *hugofs.LanguageFileInfo) *hugolib.Site {
 	for _, s := range sites.Sites {
-		if fi.Lang() == s.Language.Lang {
+		if fi.Lang() == s.Language().Lang {
 			return s
 		}
 	}
@@ -128,17 +131,20 @@ func newContentFromDir(
 		// Just copy the file to destination.
 		in, err := sourceFs.Open(filename)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to open non-content file")
 		}
 
 		targetFilename := filepath.Join(targetPath, strings.TrimPrefix(filename, archetypeDir))
 
 		targetDir := filepath.Dir(targetFilename)
 		if err := targetFs.MkdirAll(targetDir, 0777); err != nil && !os.IsExist(err) {
-			return fmt.Errorf("failed to create target directory for %s: %s", targetDir, err)
+			return errors.Wrapf(err, "failed to create target directory for %s:", targetDir)
 		}
 
 		out, err := targetFs.Create(targetFilename)
+		if err != nil {
+			return err
+		}
 
 		_, err = io.Copy(out, in)
 		if err != nil {
@@ -156,11 +162,11 @@ func newContentFromDir(
 
 		content, err := executeArcheTypeAsTemplate(s, name, archetypeDir, targetFilename, filename)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to execute archetype template")
 		}
 
 		if err := helpers.SafeWriteToDisk(targetFilename, bytes.NewReader(content), targetFs); err != nil {
-			return err
+			return errors.Wrap(err, "failed to save results")
 		}
 	}
 
@@ -187,6 +193,7 @@ func mapArcheTypeDir(
 	var m archetypeMap
 
 	walkFn := func(filename string, fi os.FileInfo, err error) error {
+
 		if err != nil {
 			return err
 		}
@@ -214,7 +221,7 @@ func mapArcheTypeDir(
 	}
 
 	if err := helpers.SymbolicWalk(fs, archetypeDir, walkFn); err != nil {
-		return m, err
+		return m, errors.Wrapf(err, "failed to walk archetype dir %q", archetypeDir)
 	}
 
 	return m, nil
@@ -223,7 +230,7 @@ func mapArcheTypeDir(
 func usesSiteVar(fs afero.Fs, filename string) (bool, error) {
 	f, err := fs.Open(filename)
 	if err != nil {
-		return false, fmt.Errorf("failed to open archetype file: %s", err)
+		return false, errors.Wrap(err, "failed to open archetype file")
 	}
 	defer f.Close()
 	return helpers.ReaderContains(f, []byte(".Site")), nil
@@ -241,7 +248,7 @@ func resolveContentPath(sites *hugolib.HugoSites, fs afero.Fs, targetPath string
 
 	// Try the filename: my-post.en.md
 	for _, ss := range sites.Sites {
-		if strings.Contains(targetPath, "."+ss.Language.Lang+".") {
+		if strings.Contains(targetPath, "."+ss.Language().Lang+".") {
 			s = ss
 			break
 		}

@@ -60,6 +60,10 @@ All partials are called within your templates using the following pattern:
 One of the most common mistakes with new Hugo users is failing to pass a context to the partial call. In the pattern above, note how "the dot" (`.`) is required as the second argument to give the partial context. You can read more about "the dot" in the [Hugo templating introduction](/templates/introduction/).
 {{% /note %}}
 
+{{% note %}}
+`<PARTIAL>` including `baseof` is reserved. ([#5373](https://github.com/gohugoio/hugo/issues/5373))
+{{% /note %}}
+
 As shown in the above example directory structure, you can nest your directories within `partials` for better source organization. You only need to call the nested partial's path relative to the `partials` directory:
 
 ```
@@ -73,7 +77,47 @@ The second argument in a partial call is the variable being passed down. The abo
 
 This means the partial will *only* be able to access those variables. The partial is isolated and *has no access to the outer scope*. From within the partial, `$.Var` is equivalent to `.Var`.
 
-### Cached Partials
+## Returning a value from a Partial
+
+In addition to outputting markup, partials can be used to return a value of any type. In order to return a value, a partial must include a lone `return` statement.
+
+### Example GetFeatured
+```go-html-template
+{{/* layouts/partials/GetFeatured.html */}}
+{{ return first . (where site.RegularPages ".Params.featured" true) }}
+```
+
+```go-html-template
+{{/* layouts/index.html */}}
+{{ range partial "GetFeatured.html" 5 }}
+  [...]
+{{ end }}
+```
+### Example GetImage
+```go-html-template
+{{/* layouts/partials/GetImage.html */}}
+{{ $image := false }}
+{{ with .Params.gallery }}
+  {{ $image = index . 0 }}
+{{ end }}
+{{ with .Params.image }}
+  {{ $image = . }}
+{{ end }}
+{{ return $image }}
+```
+
+```go-html-template
+{{/* layouts/_default/single.html */}}
+{{ with partial "GetImage.html" . }}
+  [...]
+{{ end }}
+```
+
+{{% note %}}
+Only one `return` statement is allowed per partial file.
+{{% /note %}}
+
+## Cached Partials
 
 The [`partialCached` template function][partialcached] can offer significant performance gains for complex templates that don't need to be re-rendered on every invocation. The simplest usage is as follows:
 

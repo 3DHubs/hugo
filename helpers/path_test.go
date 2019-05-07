@@ -36,39 +36,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-func TestMakeSegment(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"  FOO bar  ", "foo-bar"},
-		{"Foo.Bar/fOO_bAr-Foo", "foo.bar-foo_bar-foo"},
-		{"FOO,bar:FooBar", "foobarfoobar"},
-		{"foo/BAR.HTML", "foo-bar.html"},
-		{"трям/трям", "трям-трям"},
-		{"은행", "은행"},
-		{"Say What??", "say-what"},
-		{"Your #1 Fan", "your-1-fan"},
-		{"Red & Blue", "red-blue"},
-		{"double//slash", "double-slash"},
-		{"triple///slash", "triple-slash"},
-		{"-my/way-", "my-way"},
-	}
-
-	for _, test := range tests {
-		v := newTestCfg()
-
-		l := langs.NewDefaultLanguage(v)
-		p, err := NewPathSpec(hugofs.NewMem(v), l)
-		require.NoError(t, err)
-
-		output := p.MakeSegment(test.input)
-		if output != test.expected {
-			t.Errorf("Expected %#v, got %#v\n", test.expected, output)
-		}
-	}
-}
-
 func TestMakePath(t *testing.T) {
 	tests := []struct {
 		input         string
@@ -204,7 +171,7 @@ func TestGetRealPath(t *testing.T) {
 		t.Skip("Skip TestGetRealPath as os.Symlink needs administrator rights on Windows")
 	}
 
-	d1, err := ioutil.TempDir("", "d1")
+	d1, _ := ioutil.TempDir("", "d1")
 	defer os.Remove(d1)
 	fs := afero.NewOsFs()
 
@@ -451,6 +418,7 @@ func createNonZeroSizedFileInTempDir() (*os.File, error) {
 	f, err := createZeroSizedFileInTempDir()
 	if err != nil {
 		// no file ??
+		return nil, err
 	}
 	byteString := []byte("byteString")
 	err = ioutil.WriteFile(f.Name(), byteString, 0644)
@@ -463,10 +431,7 @@ func createNonZeroSizedFileInTempDir() (*os.File, error) {
 }
 
 func deleteFileInTempDir(f *os.File) {
-	err := os.Remove(f.Name())
-	if err != nil {
-		// now what?
-	}
+	_ = os.Remove(f.Name())
 }
 
 func createEmptyTempDir() (string, error) {
@@ -482,7 +447,7 @@ func createEmptyTempDir() (string, error) {
 func createTempDirWithZeroLengthFiles() (string, error) {
 	d, dirErr := createEmptyTempDir()
 	if dirErr != nil {
-		//now what?
+		return "", dirErr
 	}
 	filePrefix := "_path_test_"
 	_, fileErr := ioutil.TempFile(d, filePrefix) // dir is os.TempDir()
@@ -500,7 +465,7 @@ func createTempDirWithZeroLengthFiles() (string, error) {
 func createTempDirWithNonZeroLengthFiles() (string, error) {
 	d, dirErr := createEmptyTempDir()
 	if dirErr != nil {
-		//now what?
+		return "", dirErr
 	}
 	filePrefix := "_path_test_"
 	f, fileErr := ioutil.TempFile(d, filePrefix) // dir is os.TempDir()
@@ -527,10 +492,7 @@ func createTempDirWithNonZeroLengthFiles() (string, error) {
 }
 
 func deleteTempDir(d string) {
-	err := os.RemoveAll(d)
-	if err != nil {
-		// now what?
-	}
+	_ = os.RemoveAll(d)
 }
 
 func TestExists(t *testing.T) {

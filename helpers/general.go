@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/gohugoio/hugo/common/hugo"
 
 	"github.com/gohugoio/hugo/hugofs"
 
@@ -55,7 +57,7 @@ func FindAvailablePort() (*net.TCPAddr, error) {
 		if a, ok := addr.(*net.TCPAddr); ok {
 			return a, nil
 		}
-		return nil, fmt.Errorf("Unable to obtain a valid tcp port. %v", addr)
+		return nil, fmt.Errorf("unable to obtain a valid tcp port: %v", addr)
 	}
 	return nil, err
 }
@@ -90,7 +92,7 @@ func GuessType(in string) string {
 		return "org"
 	}
 
-	return "unknown"
+	return ""
 }
 
 // FirstUpper returns a string with the first character as upper case.
@@ -126,7 +128,7 @@ func ReaderToBytes(lines io.Reader) []byte {
 
 	b.ReadFrom(lines)
 
-	bc := make([]byte, b.Len(), b.Len())
+	bc := make([]byte, b.Len())
 	copy(bc, b.Bytes())
 	return bc
 }
@@ -323,12 +325,15 @@ func InitLoggers() {
 // The idea is two remove an item in two Hugo releases to give users and theme authors
 // plenty of time to fix their templates.
 func Deprecated(object, item, alternative string, err bool) {
+	if !strings.HasSuffix(alternative, ".") {
+		alternative += "."
+	}
+
 	if err {
-		DistinctErrorLog.Printf("%s's %s is deprecated and will be removed in Hugo %s. %s", object, item, CurrentHugoVersion.Next().ReleaseVersion(), alternative)
+		DistinctErrorLog.Printf("%s's %s is deprecated and will be removed in Hugo %s. %s", object, item, hugo.CurrentVersion.Next().ReleaseVersion(), alternative)
 
 	} else {
-		// Make sure the users see this while avoiding build breakage. This will not lead to an os.Exit(-1)
-		DistinctFeedbackLog.Printf("WARNING: %s's %s is deprecated and will be removed in a future release. %s", object, item, alternative)
+		DistinctWarnLog.Printf("%s's %s is deprecated and will be removed in a future release. %s", object, item, alternative)
 	}
 }
 
@@ -392,11 +397,10 @@ func MD5FromFileFast(r io.ReadSeeker) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// MD5FromFile creates a MD5 hash from the given file.
-// It will not close the file.
-func MD5FromFile(f afero.File) (string, error) {
+// MD5FromReader creates a MD5 hash from the given reader.
+func MD5FromReader(r io.Reader) (string, error) {
 	h := md5.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return "", nil
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -413,10 +417,8 @@ func NormalizeHugoFlags(f *pflag.FlagSet, name string) pflag.NormalizedName {
 	switch name {
 	case "baseUrl":
 		name = "baseURL"
-		break
 	case "uglyUrls":
 		name = "uglyURLs"
-		break
 	}
 	return pflag.NormalizedName(name)
 }

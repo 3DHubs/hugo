@@ -14,12 +14,7 @@
 package commands
 
 import (
-	"runtime"
-	"strings"
-
-	"github.com/gohugoio/hugo/helpers"
-	"github.com/gohugoio/hugo/hugolib"
-	"github.com/gohugoio/hugo/resource/tocss/scss"
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/spf13/cobra"
 	jww "github.com/spf13/jwalterweatherman"
 )
@@ -45,24 +40,5 @@ func newVersionCmd() *versionCmd {
 }
 
 func printHugoVersion() {
-	program := "Hugo Static Site Generator"
-
-	version := "v" + helpers.CurrentHugoVersion.String()
-	if hugolib.CommitHash != "" {
-		version += "-" + strings.ToUpper(hugolib.CommitHash)
-	}
-	if scss.Supports() {
-		version += "/extended"
-	}
-
-	osArch := runtime.GOOS + "/" + runtime.GOARCH
-
-	var buildDate string
-	if hugolib.BuildDate != "" {
-		buildDate = hugolib.BuildDate
-	} else {
-		buildDate = "unknown"
-	}
-
-	jww.FEEDBACK.Println(program, version, osArch, "BuildDate:", buildDate)
+	jww.FEEDBACK.Println(hugo.BuildVersionString())
 }

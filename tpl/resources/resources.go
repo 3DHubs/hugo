@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package resources provides template functions for working with resources.
 package resources
 
 import (
@@ -18,20 +19,26 @@ import (
 	"fmt"
 	"path/filepath"
 
+	_errors "github.com/pkg/errors"
+
 	"github.com/gohugoio/hugo/deps"
-	"github.com/gohugoio/hugo/resource"
-	"github.com/gohugoio/hugo/resource/bundler"
-	"github.com/gohugoio/hugo/resource/create"
-	"github.com/gohugoio/hugo/resource/integrity"
-	"github.com/gohugoio/hugo/resource/minifier"
-	"github.com/gohugoio/hugo/resource/postcss"
-	"github.com/gohugoio/hugo/resource/templates"
-	"github.com/gohugoio/hugo/resource/tocss/scss"
+	"github.com/gohugoio/hugo/resources/resource"
+	"github.com/gohugoio/hugo/resources/resource_factories/bundler"
+	"github.com/gohugoio/hugo/resources/resource_factories/create"
+	"github.com/gohugoio/hugo/resources/resource_transformers/integrity"
+	"github.com/gohugoio/hugo/resources/resource_transformers/minifier"
+	"github.com/gohugoio/hugo/resources/resource_transformers/postcss"
+	"github.com/gohugoio/hugo/resources/resource_transformers/templates"
+	"github.com/gohugoio/hugo/resources/resource_transformers/tocss/scss"
 	"github.com/spf13/cast"
 )
 
 // New returns a new instance of the resources-namespaced template functions.
 func New(deps *deps.Deps) (*Namespace, error) {
+	if deps.ResourceSpec == nil {
+		return &Namespace{}, nil
+	}
+
 	scssClient, err := scss.New(deps.BaseFs.Assets, deps.ResourceSpec)
 	if err != nil {
 		return nil, err
@@ -256,7 +263,7 @@ func (ns *Namespace) resolveArgs(args []interface{}) (resource.Resource, map[str
 
 	m, err := cast.ToStringMapE(args[0])
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid options type: %s", err)
+		return nil, nil, _errors.Wrap(err, "invalid options type")
 	}
 
 	return r, m, nil

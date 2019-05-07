@@ -79,9 +79,11 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 	}
 
 	var ivp, imvp *int64
+	var fvp, fmvp *float64
 	var svp, smvp *string
 	var slv, slmv interface{}
 	var ima []int64
+	var fma []float64
 	var sma []string
 	if mv.Type() == v.Type() {
 		switch v.Kind() {
@@ -95,6 +97,11 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 			svp = &sv
 			smv := mv.String()
 			smvp = &smv
+		case reflect.Float64:
+			fv := v.Float()
+			fvp = &fv
+			fmv := mv.Float()
+			fmvp = &fmv
 		case reflect.Struct:
 			switch v.Type() {
 			case timeType:
@@ -136,6 +143,14 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 					sma = append(sma, aString)
 				}
 			}
+		case reflect.Float64:
+			fv := v.Float()
+			fvp = &fv
+			for i := 0; i < mv.Len(); i++ {
+				if aFloat, err := toFloat(mv.Index(i)); err == nil {
+					fma = append(fma, aFloat)
+				}
+			}
 		case reflect.Struct:
 			switch v.Type() {
 			case timeType:
@@ -153,52 +168,73 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 
 	switch op {
 	case "", "=", "==", "eq":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp == *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp == *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp == *fmvp, nil
 		}
 	case "!=", "<>", "ne":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp != *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp != *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp != *fmvp, nil
 		}
 	case ">=", "ge":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp >= *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp >= *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp >= *fmvp, nil
 		}
 	case ">", "gt":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp > *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp > *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp > *fmvp, nil
 		}
 	case "<=", "le":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp <= *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp <= *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp <= *fmvp, nil
 		}
 	case "<", "lt":
-		if ivp != nil && imvp != nil {
+		switch {
+		case ivp != nil && imvp != nil:
 			return *ivp < *imvp, nil
-		} else if svp != nil && smvp != nil {
+		case svp != nil && smvp != nil:
 			return *svp < *smvp, nil
+		case fvp != nil && fmvp != nil:
+			return *fvp < *fmvp, nil
 		}
 	case "in", "not in":
 		var r bool
-		if ivp != nil && len(ima) > 0 {
-			r = ns.In(ima, *ivp)
-		} else if svp != nil {
+		switch {
+		case ivp != nil && len(ima) > 0:
+			r, _ = ns.In(ima, *ivp)
+		case fvp != nil && len(fma) > 0:
+			r, _ = ns.In(fma, *fvp)
+		case svp != nil:
 			if len(sma) > 0 {
-				r = ns.In(sma, *svp)
+				r, _ = ns.In(sma, *svp)
 			} else if smvp != nil {
-				r = ns.In(*smvp, *svp)
+				r, _ = ns.In(*smvp, *svp)
 			}
-		} else {
+		default:
 			return false, nil
 		}
 		if op == "not in" {
@@ -242,18 +278,19 @@ func evaluateSubElem(obj reflect.Value, elemName string) (reflect.Value, error) 
 	}
 	mt, ok := objPtr.Type().MethodByName(elemName)
 	if ok {
-		if mt.PkgPath != "" {
+		switch {
+		case mt.PkgPath != "":
 			return zero, fmt.Errorf("%s is an unexported method of type %s", elemName, typ)
-		}
-		// struct pointer has one receiver argument and interface doesn't have an argument
-		if mt.Type.NumIn() > 1 || mt.Type.NumOut() == 0 || mt.Type.NumOut() > 2 {
-			return zero, fmt.Errorf("%s is a method of type %s but doesn't satisfy requirements", elemName, typ)
-		}
-		if mt.Type.NumOut() == 1 && mt.Type.Out(0).Implements(errorType) {
-			return zero, fmt.Errorf("%s is a method of type %s but doesn't satisfy requirements", elemName, typ)
-		}
-		if mt.Type.NumOut() == 2 && !mt.Type.Out(1).Implements(errorType) {
-			return zero, fmt.Errorf("%s is a method of type %s but doesn't satisfy requirements", elemName, typ)
+		case mt.Type.NumIn() > 1:
+			return zero, fmt.Errorf("%s is a method of type %s but requires more than 1 parameter", elemName, typ)
+		case mt.Type.NumOut() == 0:
+			return zero, fmt.Errorf("%s is a method of type %s but returns no output", elemName, typ)
+		case mt.Type.NumOut() > 2:
+			return zero, fmt.Errorf("%s is a method of type %s but returns more than 2 outputs", elemName, typ)
+		case mt.Type.NumOut() == 1 && mt.Type.Out(0).Implements(errorType):
+			return zero, fmt.Errorf("%s is a method of type %s but only returns an error type", elemName, typ)
+		case mt.Type.NumOut() == 2 && !mt.Type.Out(1).Implements(errorType):
+			return zero, fmt.Errorf("%s is a method of type %s returning two values but the second value is not an error type", elemName, typ)
 		}
 		res := objPtr.Method(mt.Index).Call([]reflect.Value{})
 		if len(res) == 2 && !res[1].IsNil() {
@@ -321,7 +358,7 @@ func (ns *Namespace) checkWhereArray(seqv, kv, mv reflect.Value, path []string, 
 				var err error
 				vvv, err = evaluateSubElem(vvv, elemName)
 				if err != nil {
-					return nil, err
+					continue
 				}
 			}
 		} else {

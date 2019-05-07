@@ -16,9 +16,12 @@ package commands
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/gohugoio/hugo/parser/metadecoders"
+
+	_errors "github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/create"
 	"github.com/gohugoio/hugo/helpers"
@@ -92,7 +95,7 @@ func (n *newSiteCmd) doNewSite(fs *hugofs.Fs, basepath string, force bool) error
 
 	for _, dir := range dirs {
 		if err := fs.Source.MkdirAll(dir, 0777); err != nil {
-			return fmt.Errorf("Failed to create dir: %s", err)
+			return _errors.Wrap(err, "Failed to create dir")
 		}
 	}
 
@@ -130,10 +133,9 @@ func createConfig(fs *hugofs.Fs, inpath string, kind string) (err error) {
 		"title":        "My New Hugo Site",
 		"languageCode": "en-us",
 	}
-	kind = parser.FormatSanitize(kind)
 
 	var buf bytes.Buffer
-	err = parser.InterfaceToConfig(in, parser.FormatToLeadRune(kind), &buf)
+	err = parser.InterfaceToConfig(in, metadecoders.FormatFromString(kind), &buf)
 	if err != nil {
 		return err
 	}
