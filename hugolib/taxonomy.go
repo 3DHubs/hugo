@@ -15,11 +15,11 @@ package hugolib
 
 import (
 	"fmt"
-	"path"
 	"sort"
 
+	"github.com/gohugoio/hugo/compare"
+
 	"github.com/gohugoio/hugo/resources/page"
-	"github.com/gohugoio/hugo/resources/resource"
 )
 
 // The TaxonomyList is a list of all taxonomies and their values
@@ -73,7 +73,7 @@ func (i Taxonomy) TaxonomyArray() OrderedTaxonomy {
 // Alphabetical returns an ordered taxonomy sorted by key name.
 func (i Taxonomy) Alphabetical() OrderedTaxonomy {
 	name := func(i1, i2 *OrderedTaxonomyEntry) bool {
-		return i1.Name < i2.Name
+		return compare.LessStrings(i1.Name, i2.Name)
 	}
 
 	ia := i.TaxonomyArray()
@@ -89,7 +89,7 @@ func (i Taxonomy) ByCount() OrderedTaxonomy {
 		li2 := len(i2.WeightedPages)
 
 		if li1 == li2 {
-			return i1.Name < i2.Name
+			return compare.LessStrings(i1.Name, i2.Name)
 		}
 		return li1 > li2
 	}
@@ -153,96 +153,4 @@ func (s *orderedTaxonomySorter) Swap(i, j int) {
 // Less is part of sort.Interface. It is implemented by calling the "by" closure in the sorter.
 func (s *orderedTaxonomySorter) Less(i, j int) bool {
 	return s.by(&s.taxonomy[i], &s.taxonomy[j])
-}
-
-// taxonomyNodeInfo stores additional metadata about a taxonomy.
-type taxonomyNodeInfo struct {
-	plural string
-
-	// Maps "tags" to "tag".
-	singular string
-
-	// The term key as used in the taxonomy map, e.g "tag1".
-	// The value is normalized for paths, but may or not be lowercased
-	// depending on the disablePathToLower setting.
-	termKey string
-
-	// The original, unedited term name. Useful for titles etc.
-	term string
-
-	dates resource.Dates
-
-	parent *taxonomyNodeInfo
-
-	// Either of Kind taxonomyTerm (parent) or taxonomy
-	owner *page.PageWrapper
-}
-
-func (t *taxonomyNodeInfo) UpdateFromPage(p page.Page) {
-
-	// Select the latest dates
-	t.dates.UpdateDateAndLastmodIfAfter(p)
-}
-
-func (t *taxonomyNodeInfo) TransferValues(p *pageState) {
-	t.owner.Page = p
-	if p.Lastmod().IsZero() && p.Date().IsZero() {
-		p.m.Dates.UpdateDateAndLastmodIfAfter(t.dates)
-	}
-}
-
-// Maps either plural or plural/term to a taxonomy node.
-// TODO(bep) consolidate somehow with s.Taxonomies
-type taxonomyNodeInfos struct {
-	m      map[string]*taxonomyNodeInfo
-	getKey func(string) string
-}
-
-// map[string]*taxonomyNodeInfo
-func (t taxonomyNodeInfos) key(parts ...string) string {
-	return path.Join(parts...)
-}
-
-// GetOrAdd will get or create and add a new taxonomy node to the parent identified with plural.
-// It will panic if the parent does not exist.
-func (t taxonomyNodeInfos) GetOrAdd(plural, term string) *taxonomyNodeInfo {
-	parent := t.GetOrCreate(plural, "")
-	if parent == nil {
-		panic(fmt.Sprintf("no parent found with plural %q", plural))
-	}
-	child := t.GetOrCreate(plural, term)
-	child.parent = parent
-	return child
-}
-
-func (t taxonomyNodeInfos) GetOrCreate(plural, term string) *taxonomyNodeInfo {
-	termKey := t.getKey(term)
-	key := t.key(plural, termKey)
-
-	n, found := t.m[key]
-	if found {
-		return n
-	}
-
-	n = &taxonomyNodeInfo{
-		plural:  plural,
-		termKey: termKey,
-		term:    term,
-		owner:   &page.PageWrapper{}, // Page will be assigned later.
-	}
-
-	t.m[key] = n
-
-	return n
-}
-
-func (t taxonomyNodeInfos) Get(sections ...string) *taxonomyNodeInfo {
-	key := t.key(sections...)
-
-	n, found := t.m[key]
-	if found {
-		return n
-	}
-
-	return nil
 }

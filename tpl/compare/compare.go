@@ -20,18 +20,20 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gohugoio/hugo/common/types"
-
 	"github.com/gohugoio/hugo/compare"
+
+	"github.com/gohugoio/hugo/common/types"
 )
 
 // New returns a new instance of the compare-namespaced template functions.
-func New() *Namespace {
-	return &Namespace{}
+func New(caseInsensitive bool) *Namespace {
+	return &Namespace{caseInsensitive: caseInsensitive}
 }
 
 // Namespace provides template functions for the "compare" namespace.
 type Namespace struct {
+	// Enable to do case insensitive string compares.
+	caseInsensitive bool
 }
 
 // Default checks whether a given value is set and returns a default value if it
@@ -88,14 +90,13 @@ func (*Namespace) Default(dflt interface{}, given ...interface{}) (interface{}, 
 	return dflt, nil
 }
 
-// Eq returns the boolean truth of arg1 == arg2.
-func (*Namespace) Eq(x, y interface{}) bool {
-	if e, ok := x.(compare.Eqer); ok {
-		return e.Eq(y)
+// Eq returns the boolean truth of arg1 == arg2 || arg1 == arg3 || arg1 == arg4.
+func (n *Namespace) Eq(first interface{}, others ...interface{}) bool {
+	if n.caseInsensitive {
+		panic("caseInsensitive not implemented for Eq")
 	}
-
-	if e, ok := y.(compare.Eqer); ok {
-		return e.Eq(x)
+	if len(others) == 0 {
+		panic("missing arguments for comparison")
 	}
 
 	normalize := func(v interface{}) interface{} {
@@ -114,9 +115,24 @@ func (*Namespace) Eq(x, y interface{}) bool {
 			return v
 		}
 	}
-	x = normalize(x)
-	y = normalize(y)
-	return reflect.DeepEqual(x, y)
+
+	normFirst := normalize(first)
+	for _, other := range others {
+		if e, ok := first.(compare.Eqer); ok {
+			return e.Eq(other)
+		}
+
+		if e, ok := other.(compare.Eqer); ok {
+			return e.Eq(first)
+		}
+
+		other = normalize(other)
+		if reflect.DeepEqual(normFirst, other) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Ne returns the boolean truth of arg1 != arg2.
@@ -157,7 +173,7 @@ func (n *Namespace) Conditional(condition bool, a, b interface{}) interface{} {
 	return b
 }
 
-func (*Namespace) compareGet(a interface{}, b interface{}) (float64, float64) {
+func (ns *Namespace) compareGet(a interface{}, b interface{}) (float64, float64) {
 	if ac, ok := a.(compare.Comparer); ok {
 		c := ac.Compare(b)
 		if c < 0 {
@@ -225,6 +241,17 @@ func (*Namespace) compareGet(a interface{}, b interface{}) (float64, float64) {
 		switch bv.Type() {
 		case timeType:
 			right = float64(toTimeUnix(bv))
+		}
+	}
+
+	if ns.caseInsensitive && leftStr != nil && rightStr != nil {
+		c := compare.Strings(*leftStr, *rightStr)
+		if c < 0 {
+			return 0, 1
+		} else if c > 0 {
+			return 1, 0
+		} else {
+			return 0, 0
 		}
 	}
 

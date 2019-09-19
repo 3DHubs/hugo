@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gohugoio/hugo/hugofs/files"
+
 	"github.com/gohugoio/hugo/common/hugo"
 
 	"github.com/gohugoio/hugo/related"
@@ -304,19 +306,51 @@ func (p *pageMeta) Weight() int {
 	return p.weight
 }
 
-func (pm *pageMeta) setMetadata(p *pageState, frontmatter map[string]interface{}) error {
-	if frontmatter == nil {
+func (pm *pageMeta) setMetadata(bucket *pagesMapBucket, p *pageState, frontmatter map[string]interface{}) error {
+	if frontmatter == nil && bucket.cascade == nil {
 		return errors.New("missing frontmatter data")
 	}
 
 	pm.params = make(map[string]interface{})
 
-	// Needed for case insensitive fetching of params values
-	maps.ToLower(frontmatter)
+	if frontmatter != nil {
+		// Needed for case insensitive fetching of params values
+		maps.ToLower(frontmatter)
+		if p.IsNode() {
+			// Check for any cascade define on itself.
+			if cv, found := frontmatter["cascade"]; found {
+				cvm := cast.ToStringMap(cv)
+				if bucket.cascade == nil {
+					bucket.cascade = cvm
+				} else {
+					for k, v := range cvm {
+						bucket.cascade[k] = v
+					}
+				}
+			}
+		}
+
+		if bucket != nil && bucket.cascade != nil {
+			for k, v := range bucket.cascade {
+				if _, found := frontmatter[k]; !found {
+					frontmatter[k] = v
+				}
+			}
+		}
+	} else {
+		frontmatter = make(map[string]interface{})
+		for k, v := range bucket.cascade {
+			frontmatter[k] = v
+		}
+	}
 
 	var mtime time.Time
-	if p.File().FileInfo() != nil {
-		mtime = p.File().FileInfo().ModTime()
+	var contentBaseName string
+	if !p.File().IsZero() {
+		contentBaseName = p.File().ContentBaseName()
+		if p.File().FileInfo() != nil {
+			mtime = p.File().FileInfo().ModTime()
+		}
 	}
 
 	var gitAuthorDate time.Time
@@ -329,7 +363,7 @@ func (pm *pageMeta) setMetadata(p *pageState, frontmatter map[string]interface{}
 		Params:        pm.params,
 		Dates:         &pm.Dates,
 		PageURLs:      &pm.urlPaths,
-		BaseFilename:  p.File().ContentBaseName(),
+		BaseFilename:  contentBaseName,
 		ModTime:       mtime,
 		GitAuthorDate: gitAuthorDate,
 	}
@@ -544,7 +578,7 @@ func (pm *pageMeta) setMetadata(p *pageState, frontmatter map[string]interface{}
 
 	if isCJKLanguage != nil {
 		pm.isCJKLanguage = *isCJKLanguage
-	} else if p.s.siteCfg.hasCJKLanguage {
+	} else if p.s.siteCfg.hasCJKLanguage && p.source.parsed != nil {
 		if cjkRe.Match(p.source.parsed.Input()) {
 			pm.isCJKLanguage = true
 		} else {
@@ -591,15 +625,14 @@ func (p *pageMeta) applyDefaultValues() error {
 	}
 
 	if p.IsNode() {
-		p.bundleType = "branch"
+		p.bundleType = files.ContentClassBranch
 	} else {
 		source := p.File()
 		if fi, ok := source.(*fileInfo); ok {
-			switch fi.bundleTp {
-			case bundleBranch:
-				p.bundleType = "branch"
-			case bundleLeaf:
-				p.bundleType = "leaf"
+			class := fi.FileInfo().Meta().Classifier()
+			switch class {
+			case files.ContentClassBranch, files.ContentClassLeaf:
+				p.bundleType = class
 			}
 		}
 	}

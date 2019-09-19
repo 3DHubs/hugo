@@ -19,12 +19,12 @@ import (
 
 	"github.com/gohugoio/hugo/helpers"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/hugofs"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIgnoreDotFilesAndDirectories(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	tests := []struct {
 		path                string
@@ -54,8 +54,8 @@ func TestIgnoreDotFilesAndDirectories(t *testing.T) {
 		v := newTestConfig()
 		v.Set("ignoreFiles", test.ignoreFilesRegexpes)
 		fs := hugofs.NewMem(v)
-		ps, err := helpers.NewPathSpec(fs, v)
-		assert.NoError(err)
+		ps, err := helpers.NewPathSpec(fs, v, nil)
+		c.Assert(err, qt.IsNil)
 
 		s := NewSourceSpec(ps, fs.Source)
 

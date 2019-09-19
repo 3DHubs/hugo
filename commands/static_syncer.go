@@ -33,14 +33,14 @@ func newStaticSyncer(c *commandeer) (*staticSyncer, error) {
 }
 
 func (s *staticSyncer) isStatic(filename string) bool {
-	return s.c.hugo.BaseFs.SourceFilesystems.IsStatic(filename)
+	return s.c.hugo().BaseFs.SourceFilesystems.IsStatic(filename)
 }
 
 func (s *staticSyncer) syncsStaticEvents(staticEvents []fsnotify.Event) error {
 	c := s.c
 
 	syncFn := func(sourceFs *filesystems.SourceFilesystem) (uint64, error) {
-		publishDir := c.hugo.PathSpec.PublishDir
+		publishDir := c.hugo().PathSpec.PublishDir
 		// If root, remove the second '/'
 		if publishDir == "//" {
 			publishDir = helpers.FilePathSeparator
@@ -53,6 +53,7 @@ func (s *staticSyncer) syncsStaticEvents(staticEvents []fsnotify.Event) error {
 		syncer := fsync.NewSyncer()
 		syncer.NoTimes = c.Cfg.GetBool("noTimes")
 		syncer.NoChmod = c.Cfg.GetBool("noChmod")
+		syncer.ChmodFilter = chmodFilter
 		syncer.SrcFs = sourceFs.Fs
 		syncer.DestFs = c.Fs.Destination
 
@@ -79,6 +80,7 @@ func (s *staticSyncer) syncsStaticEvents(staticEvents []fsnotify.Event) error {
 			fromPath := ev.Name
 
 			relPath := sourceFs.MakePathRelative(fromPath)
+
 			if relPath == "" {
 				// Not member of this virtual host.
 				continue

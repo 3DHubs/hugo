@@ -16,6 +16,11 @@ package commands
 import (
 	"bytes"
 	"errors"
+	"sync"
+
+	"golang.org/x/sync/semaphore"
+
+	"github.com/gohugoio/hugo/modules"
 
 	"io/ioutil"
 
@@ -27,8 +32,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/gohugoio/hugo/common/loggers"
@@ -49,8 +52,9 @@ import (
 
 type commandeerHugoState struct {
 	*deps.DepsCfg
-	hugo     *hugolib.HugoSites
-	fsCreate sync.Once
+	hugoSites *hugolib.HugoSites
+	fsCreate  sync.Once
+	created   chan struct{}
 }
 
 type commandeer struct {
@@ -88,8 +92,21 @@ type commandeer struct {
 	configured bool
 	paused     bool
 
+	fullRebuildSem *semaphore.Weighted
+
 	// Any error from the last build.
 	buildErr error
+}
+
+func newCommandeerHugoState() *commandeerHugoState {
+	return &commandeerHugoState{
+		created: make(chan struct{}),
+	}
+}
+
+func (c *commandeerHugoState) hugo() *hugolib.HugoSites {
+	<-c.created
+	return c.hugoSites
 }
 
 func (c *commandeer) errCount() int {
@@ -149,10 +166,11 @@ func newCommandeer(mustHaveConfigFile, running bool, h *hugoBuilderCommon, f fla
 	c := &commandeer{
 		h:                   h,
 		ftch:                f,
-		commandeerHugoState: &commandeerHugoState{},
+		commandeerHugoState: newCommandeerHugoState(),
 		doWithCommandeer:    doWithCommandeer,
 		visitedURLs:         types.NewEvictingStringQueue(10),
 		debounce:            rebuildDebouncer,
+		fullRebuildSem:      semaphore.NewWeighted(1),
 		// This will be replaced later, but we need something to log to before the configuration is read.
 		logger: loggers.NewLogger(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, running),
 	}
@@ -282,6 +300,7 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 			WorkingDir:   dir,
 			Filename:     c.h.cfgFile,
 			AbsConfigDir: c.h.getConfigDir(dir),
+			Environ:      os.Environ(),
 			Environment:  environment},
 		doWithCommandeer,
 		doWithConfig)
@@ -290,7 +309,7 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		if mustHaveConfigFile {
 			return err
 		}
-		if err != hugolib.ErrNoConfigFile {
+		if err != hugolib.ErrNoConfigFile && !modules.IsNotExist(err) {
 			return err
 		}
 
@@ -366,13 +385,15 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 
 		err = c.initFs(fs)
 		if err != nil {
+			close(c.created)
 			return
 		}
 
 		var h *hugolib.HugoSites
 
 		h, err = hugolib.NewHugoSites(*c.DepsCfg)
-		c.hugo = h
+		c.hugoSites = h
+		close(c.created)
 
 	})
 
@@ -387,21 +408,6 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 	config.Set("cacheDir", cacheDir)
 
 	cfg.Logger.INFO.Println("Using config file:", config.ConfigFileUsed())
-
-	themeDir := c.hugo.PathSpec.GetFirstThemeDir()
-	if themeDir != "" {
-		if _, err := sourceFs.Stat(themeDir); os.IsNotExist(err) {
-			return newSystemError("Unable to find theme Directory:", themeDir)
-		}
-	}
-
-	dir, themeVersionMismatch, minVersion := c.isThemeVsHugoVersionMismatch(sourceFs)
-
-	if themeVersionMismatch {
-		name := filepath.Base(dir)
-		cfg.Logger.ERROR.Printf("%s theme does not support Hugo version %s. Minimum version required is %s\n",
-			strings.ToUpper(name), hugo.CurrentVersion.ReleaseVersion(), minVersion)
-	}
 
 	return nil
 

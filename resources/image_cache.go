@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gohugoio/hugo/common/hugio"
+	"github.com/gohugoio/hugo/resources/images"
 
 	"github.com/gohugoio/hugo/cache/filecache"
 	"github.com/gohugoio/hugo/helpers"
@@ -32,7 +32,7 @@ type imageCache struct {
 	fileCache *filecache.Cache
 
 	mu    sync.RWMutex
-	store map[string]*Image
+	store map[string]*resourceAdapter
 }
 
 func (c *imageCache) isInCache(key string) bool {
@@ -66,31 +66,41 @@ func (c *imageCache) normalizeKey(key string) string {
 func (c *imageCache) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.store = make(map[string]*Image)
+	c.store = make(map[string]*resourceAdapter)
 }
 
 func (c *imageCache) getOrCreate(
-	parent *Image, conf imageConfig, createImage func() (*Image, image.Image, error)) (*Image, error) {
-
+	parent *imageResource, conf images.ImageConfig,
+	createImage func() (*imageResource, image.Image, error)) (*resourceAdapter, error) {
 	relTarget := parent.relTargetPathFromConfig(conf)
-	key := parent.relTargetPathForRel(relTarget.path(), false, false, false)
+	memKey := parent.relTargetPathForRel(relTarget.path(), false, false, false)
+
+	// For the file cache we want to generate and store it once if possible.
+	fileKeyPath := relTarget
+	if fi := parent.root.getFileInfo(); fi != nil {
+		fileKeyPath.dir = filepath.ToSlash(filepath.Dir(fi.Meta().Path()))
+	}
+	fileKey := fileKeyPath.path()
 
 	// First check the in-memory store, then the disk.
 	c.mu.RLock()
-	img, found := c.store[key]
+	cachedImage, found := c.store[memKey]
 	c.mu.RUnlock()
 
 	if found {
-		return img, nil
+		return cachedImage, nil
 	}
+
+	var img *imageResource
 
 	// These funcs are protected by a named lock.
 	// read clones the parent to its new name and copies
 	// the content to the destinations.
 	read := func(info filecache.ItemInfo, r io.Reader) error {
-		img = parent.clone()
-		img.relTargetDirFile.file = relTarget.file
-		img.sourceFilename = info.Name
+		img = parent.clone(nil)
+		rp := img.getResourcePaths()
+		rp.relTargetDirFile.file = relTarget.file
+		img.setSourceFilename(info.Name)
 
 		w, err := img.openDestinationsForWriting()
 		if err != nil {
@@ -107,29 +117,20 @@ func (c *imageCache) getOrCreate(
 		return err
 	}
 
-	// create creates the image and encodes it to w (cache) and to its destinations.
+	// create creates the image and encodes it to the cache (w).
 	create := func(info filecache.ItemInfo, w io.WriteCloser) (err error) {
+		defer w.Close()
+
 		var conv image.Image
 		img, conv, err = createImage()
 		if err != nil {
-			w.Close()
 			return
 		}
-		img.relTargetDirFile.file = relTarget.file
-		img.sourceFilename = info.Name
+		rp := img.getResourcePaths()
+		rp.relTargetDirFile.file = relTarget.file
+		img.setSourceFilename(info.Name)
 
-		destinations, err := img.openDestinationsForWriting()
-		if err != nil {
-			w.Close()
-			return err
-		}
-
-		if destinations != nil {
-			w = hugio.NewMultiWriteCloser(w, destinations)
-		}
-		defer w.Close()
-
-		return img.encodeTo(conf, conv, w)
+		return img.EncodeTo(conf, conv, w)
 	}
 
 	// Now look in the file cache.
@@ -139,26 +140,27 @@ func (c *imageCache) getOrCreate(
 	//  but the count of processed image variations for this site.
 	c.pathSpec.ProcessingStats.Incr(&c.pathSpec.ProcessingStats.ProcessedImages)
 
-	_, err := c.fileCache.ReadOrCreate(key, read, create)
+	_, err := c.fileCache.ReadOrCreate(fileKey, read, create)
 	if err != nil {
 		return nil, err
 	}
 
 	// The file is now stored in this cache.
-	img.overriddenSourceFs = c.fileCache.Fs
+	img.setSourceFs(c.fileCache.Fs)
 
 	c.mu.Lock()
-	if img2, found := c.store[key]; found {
+	if cachedImage, found = c.store[memKey]; found {
 		c.mu.Unlock()
-		return img2, nil
+		return cachedImage, nil
 	}
-	c.store[key] = img
+
+	imgAdapter := newResourceAdapter(parent.getSpec(), true, img)
+	c.store[memKey] = imgAdapter
 	c.mu.Unlock()
 
-	return img, nil
-
+	return imgAdapter, nil
 }
 
 func newImageCache(fileCache *filecache.Cache, ps *helpers.PathSpec) *imageCache {
-	return &imageCache{fileCache: fileCache, pathSpec: ps, store: make(map[string]*Image)}
+	return &imageCache{fileCache: fileCache, pathSpec: ps, store: make(map[string]*resourceAdapter)}
 }

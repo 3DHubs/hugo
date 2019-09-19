@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -27,9 +28,8 @@ import (
 	bp "github.com/gohugoio/hugo/bufferpool"
 	"github.com/gohugoio/hugo/tpl"
 
-	"github.com/gohugoio/hugo/output"
-
 	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/output"
 	"github.com/gohugoio/hugo/resources/page"
 	"github.com/gohugoio/hugo/resources/resource"
 )
@@ -66,8 +66,19 @@ func newPageContentOutput(p *pageState) func(f output.Format) (*pageContentOutpu
 			f: f,
 		}
 
-		initContent := func() error {
-			var err error
+		initContent := func() (err error) {
+			if p.cmap == nil {
+				// Nothing to do.
+				return nil
+			}
+			defer func() {
+				// See https://github.com/gohugoio/hugo/issues/6210
+				if r := recover(); r != nil {
+					err = fmt.Errorf("%s", r)
+					p.s.Log.ERROR.Println("[BUG] Got panic:\n", string(debug.Stack()))
+				}
+			}()
+
 			var hasVariants bool
 
 			cp.contentPlaceholders, hasVariants, err = p.shortcodeState.renderShortcodesForPage(p, f)

@@ -16,16 +16,22 @@ package site
 import (
 	"testing"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/deps"
-	"github.com/gohugoio/hugo/htesting"
+	"github.com/gohugoio/hugo/htesting/hqt"
+	"github.com/gohugoio/hugo/resources/page"
 	"github.com/gohugoio/hugo/tpl/internal"
-	"github.com/stretchr/testify/require"
+	"github.com/spf13/viper"
 )
 
 func TestInit(t *testing.T) {
+	c := qt.New(t)
+
 	var found bool
 	var ns *internal.TemplateFuncsNamespace
-	s := htesting.NewTestHugoSite()
+	v := viper.New()
+	v.Set("contentDir", "content")
+	s := page.NewDummyHugoSite(v)
 
 	for _, nsf := range internal.TemplateFuncsNamespaceRegistry {
 		ns = nsf(&deps.Deps{Site: s})
@@ -35,6 +41,6 @@ func TestInit(t *testing.T) {
 		}
 	}
 
-	require.True(t, found)
-	require.IsType(t, s, ns.Context())
+	c.Assert(found, qt.Equals, true)
+	c.Assert(ns.Context(), hqt.IsSameType, s)
 }

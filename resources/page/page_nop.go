@@ -17,8 +17,9 @@ package page
 
 import (
 	"html/template"
-	"os"
 	"time"
+
+	"github.com/gohugoio/hugo/hugofs"
 
 	"github.com/bep/gitmap"
 	"github.com/gohugoio/hugo/navigation"
@@ -147,7 +148,7 @@ func (p *nopPage) File() source.File {
 	return nilFile
 }
 
-func (p *nopPage) FileInfo() os.FileInfo {
+func (p *nopPage) FileInfo() hugofs.FileMetaInfo {
 	return nil
 }
 
@@ -280,6 +281,10 @@ func (p *nopPage) OutputFormats() OutputFormats {
 }
 
 func (p *nopPage) Pages() Pages {
+	return nil
+}
+
+func (p *nopPage) RegularPages() Pages {
 	return nil
 }
 

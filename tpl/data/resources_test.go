@@ -15,7 +15,6 @@ package data
 
 import (
 	"bytes"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,8 +22,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gohugoio/hugo/modules"
+
 	"github.com/gohugoio/hugo/helpers"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/cache/filecache"
 	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/config"
@@ -33,8 +35,6 @@ import (
 	"github.com/gohugoio/hugo/langs"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestScpGetLocal(t *testing.T) {
@@ -86,8 +86,9 @@ func getTestServer(handler func(w http.ResponseWriter, r *http.Request)) (*httpt
 
 func TestScpGetRemote(t *testing.T) {
 	t.Parallel()
+	c := qt.New(t)
 	fs := new(afero.MemMapFs)
-	cache := filecache.NewCache(fs, 100)
+	cache := filecache.NewCache(fs, 100, "")
 
 	tests := []struct {
 		path    string
@@ -100,10 +101,10 @@ func TestScpGetRemote(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		msg := fmt.Sprintf("%v", test)
+		msg := qt.Commentf("%v", test)
 
 		req, err := http.NewRequest("GET", test.path, nil)
-		require.NoError(t, err, msg)
+		c.Assert(err, qt.IsNil, msg)
 
 		srv, cl := getTestServer(func(w http.ResponseWriter, r *http.Request) {
 			w.Write(test.content)
@@ -113,23 +114,24 @@ func TestScpGetRemote(t *testing.T) {
 		ns := newTestNs()
 		ns.client = cl
 
-		var c []byte
+		var cb []byte
 		f := func(b []byte) (bool, error) {
-			c = b
+			cb = b
 			return false, nil
 		}
 
 		err = ns.getRemote(cache, f, req)
-		require.NoError(t, err, msg)
-		assert.Equal(t, string(test.content), string(c))
+		c.Assert(err, qt.IsNil, msg)
+		c.Assert(string(cb), qt.Equals, string(test.content))
 
-		assert.Equal(t, string(test.content), string(c))
+		c.Assert(string(cb), qt.Equals, string(test.content))
 
 	}
 }
 
 func TestScpGetRemoteParallel(t *testing.T) {
 	t.Parallel()
+	c := qt.New(t)
 
 	content := []byte(`T€st Content 123`)
 	srv, cl := getTestServer(func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +142,7 @@ func TestScpGetRemoteParallel(t *testing.T) {
 
 	url := "http://Foo.Bar/foo_Bar-Foo"
 	req, err := http.NewRequest("GET", url, nil)
-	require.NoError(t, err)
+	c.Assert(err, qt.IsNil)
 
 	for _, ignoreCache := range []bool{false} {
 		cfg := viper.New()
@@ -157,16 +159,16 @@ func TestScpGetRemoteParallel(t *testing.T) {
 			go func(gor int) {
 				defer wg.Done()
 				for j := 0; j < 10; j++ {
-					var c []byte
+					var cb []byte
 					f := func(b []byte) (bool, error) {
-						c = b
+						cb = b
 						return false, nil
 					}
 					err := ns.getRemote(ns.cacheGetJSON, f, req)
 
-					assert.NoError(t, err)
-					if string(content) != string(c) {
-						t.Errorf("expected\n%q\ngot\n%q", content, c)
+					c.Assert(err, qt.IsNil)
+					if string(content) != string(cb) {
+						t.Errorf("expected\n%q\ngot\n%q", content, cb)
 					}
 
 					time.Sleep(23 * time.Millisecond)
@@ -186,17 +188,22 @@ func newDeps(cfg config.Provider) *deps.Deps {
 	cfg.Set("layoutDir", "layouts")
 	cfg.Set("archetypeDir", "archetypes")
 
-	l := langs.NewLanguage("en", cfg)
-	l.Set("i18nDir", "i18n")
-	cs, err := helpers.NewContentSpec(l)
+	langs.LoadLanguageSettings(cfg, nil)
+	mod, err := modules.CreateProjectModule(cfg)
+	if err != nil {
+		panic(err)
+	}
+	cfg.Set("allModules", modules.Modules{mod})
+
+	cs, err := helpers.NewContentSpec(cfg)
 	if err != nil {
 		panic(err)
 	}
 
-	fs := hugofs.NewMem(l)
+	fs := hugofs.NewMem(cfg)
 	logger := loggers.NewErrorLogger()
 
-	p, err := helpers.NewPathSpec(fs, cfg)
+	p, err := helpers.NewPathSpec(fs, cfg, nil)
 	if err != nil {
 		panic(err)
 	}

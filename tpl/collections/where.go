@@ -114,6 +114,17 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 			slv = v.Interface()
 			slmv = mv.Interface()
 		}
+	} else if isNumber(v.Kind()) && isNumber(mv.Kind()) {
+		fv, err := toFloat(v)
+		if err != nil {
+			return false, err
+		}
+		fvp = &fv
+		fmv, err := toFloat(mv)
+		if err != nil {
+			return false, err
+		}
+		fmvp = &fmv
 	} else {
 		if mv.Kind() != reflect.Array && mv.Kind() != reflect.Slice {
 			return false, nil
@@ -269,8 +280,16 @@ func evaluateSubElem(obj reflect.Value, elemName string) (reflect.Value, error) 
 	typ := obj.Type()
 	obj, isNil := indirect(obj)
 
+	if obj.Kind() == reflect.Interface {
+		// If obj is an interface, we need to inspect the value it contains
+		// to see the full set of methods and fields.
+		// Indirect returns the value that it points to, which is what's needed
+		// below to be able to reflect on its fields.
+		obj = reflect.Indirect(obj.Elem())
+	}
+
 	// first, check whether obj has a method. In this case, obj is
-	// an interface, a struct or its pointer. If obj is a struct,
+	// a struct or its pointer. If obj is a struct,
 	// to check all T and *T method, use obj pointer type Value
 	objPtr := obj
 	if objPtr.Kind() != reflect.Interface && objPtr.CanAddr() {
@@ -426,6 +445,8 @@ func toFloat(v reflect.Value) (float64, error) {
 	switch v.Kind() {
 	case reflect.Float32, reflect.Float64:
 		return v.Float(), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Convert(reflect.TypeOf(float64(0))).Float(), nil
 	case reflect.Interface:
 		return toFloat(v.Elem())
 	}

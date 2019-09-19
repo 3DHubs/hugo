@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	_errors "github.com/pkg/errors"
 )
@@ -44,6 +45,18 @@ func FprintStackTrace(w io.Writer, err error) {
 			fmt.Fprintf(w, "%+s:%d\n", f, f)
 		}
 	}
+}
+
+// Recover is a helper function that can be used to capture panics.
+// Put this at the top of a method/function that crashes in a template:
+//     defer herrors.Recover()
+func Recover(args ...interface{}) {
+	if r := recover(); r != nil {
+		fmt.Println("ERR:", r)
+		args = append(args, "stacktrace from panic: \n"+string(debug.Stack()), "\n")
+		fmt.Println(args...)
+	}
+
 }
 
 // ErrFeatureNotAvailable denotes that a feature is unavailable.

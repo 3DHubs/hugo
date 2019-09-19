@@ -17,13 +17,16 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/gohugoio/hugo/resources/resource"
 
 	"github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/cache"
-	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/resources/page"
 )
 
@@ -32,6 +35,7 @@ var ambiguityFlag = &pageState{}
 
 // PageCollections contains the page collections for a site.
 type PageCollections struct {
+	pagesMap *pagesMap
 
 	// Includes absolute all pages (of all types), including drafts etc.
 	rawAllPages pageStatePages
@@ -148,7 +152,6 @@ func newPageCollectionsFromPages(pages pageStatePages) *PageCollections {
 			for _, p := range pageCollection {
 				if p.IsPage() {
 					sourceRef := p.sourceRef()
-
 					if sourceRef != "" {
 						// index the canonical ref
 						// e.g. /section/article.md
@@ -281,11 +284,6 @@ func (c *PageCollections) getPageNew(context page.Page, ref string) (page.Page, 
 		// Many people will have "post/foo.md" in their content files.
 		p, err := c.getFromCache("/" + ref)
 		if err == nil && p != nil {
-			if context != nil {
-				// TODO(bep) remove this case and the message below when the storm has passed
-				err := wrapErr(errors.New(`make non-relative ref/relref page reference(s) in page %q absolute, e.g. {{< ref "/blog/my-post.md" >}}`), context)
-				helpers.DistinctWarnLog.Println(err)
-			}
 			return p, nil
 		}
 		if err != nil {
@@ -341,15 +339,6 @@ func (*PageCollections) findPagesByKindInWorkPages(kind string, inPages pageStat
 	return pages
 }
 
-func (c *PageCollections) findFirstWorkPageByKindIn(kind string) *pageState {
-	for _, p := range c.workAllPages {
-		if p.Kind() == kind {
-			return p
-		}
-	}
-	return nil
-}
-
 func (c *PageCollections) addPage(page *pageState) {
 	c.rawAllPages = append(c.rawAllPages, page)
 }
@@ -389,4 +378,183 @@ func (c *PageCollections) clearResourceCacheForPage(page *pageState) {
 	if len(page.resources) > 0 {
 		page.s.ResourceSpec.DeleteCacheByPrefix(page.targetPaths().SubResourceBaseTarget)
 	}
+}
+
+func (c *PageCollections) assemblePagesMap(s *Site) error {
+
+	c.pagesMap = newPagesMap(s)
+
+	rootSections := make(map[string]bool)
+
+	// Add all branch nodes first.
+	for _, p := range c.rawAllPages {
+		rootSections[p.Section()] = true
+		if p.IsPage() {
+			continue
+		}
+		c.pagesMap.addPage(p)
+	}
+
+	// Create missing home page and the first level sections if no
+	// _index provided.
+	s.home = c.pagesMap.getOrCreateHome()
+	for k := range rootSections {
+		c.pagesMap.createSectionIfNotExists(k)
+	}
+
+	// Attach the regular pages to their section.
+	for _, p := range c.rawAllPages {
+		if p.IsNode() {
+			continue
+		}
+		c.pagesMap.addPage(p)
+	}
+
+	return nil
+}
+
+func (c *PageCollections) createWorkAllPages() error {
+	c.workAllPages = make(pageStatePages, 0, len(c.rawAllPages))
+	c.headlessPages = make(pageStatePages, 0)
+
+	var (
+		homeDates    *resource.Dates
+		sectionDates *resource.Dates
+		siteLastmod  time.Time
+		siteLastDate time.Time
+
+		sectionsParamId      = "mainSections"
+		sectionsParamIdLower = strings.ToLower(sectionsParamId)
+	)
+
+	mainSections, mainSectionsFound := c.pagesMap.s.Info.Params()[sectionsParamIdLower]
+
+	var (
+		bucketsToRemove []string
+		rootBuckets     []*pagesMapBucket
+		walkErr         error
+	)
+
+	c.pagesMap.r.Walk(func(s string, v interface{}) bool {
+		bucket := v.(*pagesMapBucket)
+		parentBucket := c.pagesMap.parentBucket(s)
+
+		if parentBucket != nil {
+
+			if !mainSectionsFound && strings.Count(s, "/") == 1 && bucket.owner.IsSection() {
+				// Root section
+				rootBuckets = append(rootBuckets, bucket)
+			}
+		}
+
+		if bucket.owner.IsHome() {
+			if resource.IsZeroDates(bucket.owner) {
+				// Calculate dates from the page tree.
+				homeDates = &bucket.owner.m.Dates
+			}
+		}
+
+		sectionDates = nil
+		if resource.IsZeroDates(bucket.owner) {
+			sectionDates = &bucket.owner.m.Dates
+		}
+
+		if parentBucket != nil {
+			bucket.parent = parentBucket
+			if bucket.owner.IsSection() {
+				parentBucket.bucketSections = append(parentBucket.bucketSections, bucket)
+			}
+		}
+
+		if bucket.isEmpty() {
+			if bucket.owner.IsSection() && bucket.owner.File().IsZero() {
+				// Check for any nested section.
+				var hasDescendant bool
+				c.pagesMap.r.WalkPrefix(s, func(ss string, v interface{}) bool {
+					if s != ss {
+						hasDescendant = true
+						return true
+					}
+					return false
+				})
+				if !hasDescendant {
+					// This is an auto-created section with, now, nothing in it.
+					bucketsToRemove = append(bucketsToRemove, s)
+					return false
+				}
+			}
+		}
+
+		if !bucket.disabled {
+			c.workAllPages = append(c.workAllPages, bucket.owner)
+		}
+
+		if !bucket.view {
+			for _, p := range bucket.pages {
+				ps := p.(*pageState)
+				ps.parent = bucket.owner
+				if ps.m.headless {
+					c.headlessPages = append(c.headlessPages, ps)
+				} else {
+					c.workAllPages = append(c.workAllPages, ps)
+				}
+
+				if homeDates != nil {
+					homeDates.UpdateDateAndLastmodIfAfter(ps)
+				}
+
+				if sectionDates != nil {
+					sectionDates.UpdateDateAndLastmodIfAfter(ps)
+				}
+
+				if p.Lastmod().After(siteLastmod) {
+					siteLastmod = p.Lastmod()
+				}
+				if p.Date().After(siteLastDate) {
+					siteLastDate = p.Date()
+				}
+			}
+		}
+
+		return false
+	})
+
+	if walkErr != nil {
+		return walkErr
+	}
+
+	c.pagesMap.s.lastmod = siteLastmod
+
+	if !mainSectionsFound {
+
+		// Calculare main section
+		var (
+			maxRootBucketWeight int
+			maxRootBucket       *pagesMapBucket
+		)
+
+		for _, b := range rootBuckets {
+			weight := len(b.pages) + (len(b.bucketSections) * 5)
+			if weight >= maxRootBucketWeight {
+				maxRootBucket = b
+				maxRootBucketWeight = weight
+			}
+		}
+
+		if maxRootBucket != nil {
+			// Try to make this as backwards compatible as possible.
+			mainSections = []string{maxRootBucket.owner.Section()}
+		}
+	}
+
+	c.pagesMap.s.Info.Params()[sectionsParamId] = mainSections
+	c.pagesMap.s.Info.Params()[sectionsParamIdLower] = mainSections
+
+	for _, key := range bucketsToRemove {
+		c.pagesMap.r.Delete(key)
+	}
+
+	sort.Sort(c.workAllPages)
+
+	return nil
 }

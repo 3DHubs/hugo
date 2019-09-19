@@ -17,6 +17,9 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/gohugoio/hugo/resources/internal"
+	"github.com/spf13/cast"
+
 	"github.com/gohugoio/hugo/hugofs"
 	"github.com/pkg/errors"
 
@@ -36,7 +39,7 @@ type Options struct {
 	// Set a custom path to look for a config file.
 	Config string
 
-	NoMap bool `mapstructure:"no-map"` // Disable the default inline sourcemaps
+	NoMap bool // Disable the default inline sourcemaps
 
 	// Options for when not using a config file
 	Use         string // List of postcss plugins to use
@@ -50,6 +53,14 @@ func DecodeOptions(m map[string]interface{}) (opts Options, err error) {
 		return
 	}
 	err = mapstructure.WeakDecode(m, &opts)
+
+	if !opts.NoMap {
+		// There was for a long time a discrepancy between documentation and
+		// implementation for the noMap property, so we need to support both
+		// camel and snake case.
+		opts.NoMap = cast.ToBool(m["no-map"])
+	}
+
 	return
 }
 
@@ -88,8 +99,8 @@ type postcssTransformation struct {
 	rs      *resources.Spec
 }
 
-func (t *postcssTransformation) Key() resources.ResourceTransformationKey {
-	return resources.NewResourceTransformationKey("postcss", t.options)
+func (t *postcssTransformation) Key() internal.ResourceTransformationKey {
+	return internal.NewResourceTransformationKey("postcss", t.options)
 }
 
 // Transform shells out to postcss-cli to do the heavy lifting.
@@ -98,7 +109,7 @@ func (t *postcssTransformation) Key() resources.ResourceTransformationKey {
 // npm install -g autoprefixer
 func (t *postcssTransformation) Transform(ctx *resources.ResourceTransformationCtx) error {
 
-	const localPostCSSPath = "node_modules/postcss-cli/bin/"
+	const localPostCSSPath = "node_modules/.bin/"
 	const binaryName = "postcss"
 
 	// Try first in the project's node_modules.
@@ -130,7 +141,7 @@ func (t *postcssTransformation) Transform(ctx *resources.ResourceTransformationC
 	if !filepath.IsAbs(configFile) {
 		// We resolve this against the virtual Work filesystem, to allow
 		// this config file to live in one of the themes if needed.
-		fi, err := t.rs.BaseFs.Work.Fs.Stat(configFile)
+		fi, err := t.rs.BaseFs.Work.Stat(configFile)
 		if err != nil {
 			if t.options.Config != "" {
 				// Only fail if the user specificed config file is not found.
@@ -138,7 +149,7 @@ func (t *postcssTransformation) Transform(ctx *resources.ResourceTransformationC
 			}
 			configFile = ""
 		} else {
-			configFile = fi.(hugofs.RealFilenameInfo).RealFilename()
+			configFile = fi.(hugofs.FileMetaInfo).Meta().Filename()
 		}
 	}
 
@@ -177,9 +188,6 @@ func (t *postcssTransformation) Transform(ctx *resources.ResourceTransformationC
 }
 
 // Process transforms the given Resource with the PostCSS processor.
-func (c *Client) Process(res resource.Resource, options Options) (resource.Resource, error) {
-	return c.rs.Transform(
-		res,
-		&postcssTransformation{rs: c.rs, options: options},
-	)
+func (c *Client) Process(res resources.ResourceTransformer, options Options) (resource.Resource, error) {
+	return res.Transform(&postcssTransformation{rs: c.rs, options: options})
 }

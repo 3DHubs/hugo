@@ -15,17 +15,14 @@ package source
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/gohugoio/hugo/helpers"
-
-	"github.com/gohugoio/hugo/hugofs"
-	"github.com/spf13/afero"
-	"github.com/stretchr/testify/require"
+	qt "github.com/frankban/quicktest"
 )
 
 func TestFileInfo(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	s := newTestSourceSpec()
 
@@ -35,76 +32,30 @@ func TestFileInfo(t *testing.T) {
 		assert   func(f *FileInfo)
 	}{
 		{filepath.FromSlash("/a/"), filepath.FromSlash("/a/b/page.md"), func(f *FileInfo) {
-			assert.Equal(filepath.FromSlash("/a/b/page.md"), f.Filename())
-			assert.Equal(filepath.FromSlash("b/"), f.Dir())
-			assert.Equal(filepath.FromSlash("b/page.md"), f.Path())
-			assert.Equal("b", f.Section())
-			assert.Equal(filepath.FromSlash("page"), f.TranslationBaseName())
-			assert.Equal(filepath.FromSlash("page"), f.BaseFileName())
+			c.Assert(f.Filename(), qt.Equals, filepath.FromSlash("/a/b/page.md"))
+			c.Assert(f.Dir(), qt.Equals, filepath.FromSlash("b/"))
+			c.Assert(f.Path(), qt.Equals, filepath.FromSlash("b/page.md"))
+			c.Assert(f.Section(), qt.Equals, "b")
+			c.Assert(f.TranslationBaseName(), qt.Equals, filepath.FromSlash("page"))
+			c.Assert(f.BaseFileName(), qt.Equals, filepath.FromSlash("page"))
 
 		}},
 		{filepath.FromSlash("/a/"), filepath.FromSlash("/a/b/c/d/page.md"), func(f *FileInfo) {
-			assert.Equal("b", f.Section())
+			c.Assert(f.Section(), qt.Equals, "b")
 
 		}},
 		{filepath.FromSlash("/a/"), filepath.FromSlash("/a/b/page.en.MD"), func(f *FileInfo) {
-			assert.Equal("b", f.Section())
-			assert.Equal(filepath.FromSlash("b/page.en.MD"), f.Path())
-			assert.Equal(filepath.FromSlash("page"), f.TranslationBaseName())
-			assert.Equal(filepath.FromSlash("page.en"), f.BaseFileName())
+			c.Assert(f.Section(), qt.Equals, "b")
+			c.Assert(f.Path(), qt.Equals, filepath.FromSlash("b/page.en.MD"))
+			c.Assert(f.TranslationBaseName(), qt.Equals, filepath.FromSlash("page"))
+			c.Assert(f.BaseFileName(), qt.Equals, filepath.FromSlash("page.en"))
 
 		}},
 	} {
-		f := s.NewFileInfo(this.base, this.filename, false, nil)
+		path := strings.TrimPrefix(this.filename, this.base)
+		f, err := s.NewFileInfoFrom(path, this.filename)
+		c.Assert(err, qt.IsNil)
 		this.assert(f)
 	}
 
-}
-
-func TestFileInfoLanguage(t *testing.T) {
-	assert := require.New(t)
-	langs := map[string]bool{
-		"sv": true,
-		"en": true,
-	}
-
-	m := afero.NewMemMapFs()
-	lfs := hugofs.NewLanguageFs("sv", langs, m)
-	v := newTestConfig()
-
-	fs := hugofs.NewFrom(m, v)
-
-	ps, err := helpers.NewPathSpec(fs, v)
-	assert.NoError(err)
-	s := SourceSpec{SourceFs: lfs, PathSpec: ps}
-	s.Languages = map[string]interface{}{
-		"en": true,
-	}
-
-	err = afero.WriteFile(lfs, "page.md", []byte("abc"), 0777)
-	assert.NoError(err)
-	err = afero.WriteFile(lfs, "page.en.md", []byte("abc"), 0777)
-	assert.NoError(err)
-
-	sv, _ := lfs.Stat("page.md")
-	en, _ := lfs.Stat("page.en.md")
-
-	fiSv := s.NewFileInfo("", "page.md", false, sv)
-	fiEn := s.NewFileInfo("", "page.en.md", false, en)
-
-	assert.Equal("sv", fiSv.Lang())
-	assert.Equal("en", fiEn.Lang())
-
-	// test contentBaseName implementation
-	fi := s.NewFileInfo("", "2018-10-01-contentbasename.md", false, nil)
-	assert.Equal("2018-10-01-contentbasename", fi.ContentBaseName())
-
-	fi = s.NewFileInfo("", "2018-10-01-contentbasename.en.md", false, nil)
-	assert.Equal("2018-10-01-contentbasename", fi.ContentBaseName())
-
-	fi = s.NewFileInfo("", filepath.Join("2018-10-01-contentbasename", "index.en.md"), true, nil)
-	assert.Equal("2018-10-01-contentbasename", fi.ContentBaseName())
-
-	fi = s.NewFileInfo("", filepath.Join("2018-10-01-contentbasename", "_index.en.md"), false, nil)
-	assert.Equal("_index", fi.ContentBaseName())
 }

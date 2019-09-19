@@ -27,8 +27,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gohugoio/hugo/common/maps"
+	"github.com/niklasfasching/go-org/org"
 
-	"github.com/chaseadamsio/goorgeous"
 	bp "github.com/gohugoio/hugo/bufferpool"
 	"github.com/gohugoio/hugo/config"
 	"github.com/miekg/mmark"
@@ -511,12 +511,6 @@ func TotalWords(s string) int {
 	return n
 }
 
-// Old implementation only kept for benchmark comparison.
-// TODO(bep) remove
-func totalWordsOld(s string) int {
-	return len(strings.Fields(s))
-}
-
 // TruncateWordsByRune truncates words by runes.
 func (c *ContentSpec) TruncateWordsByRune(in []string) (string, bool) {
 	words := make([]string, len(in))
@@ -756,10 +750,24 @@ func getPandocContent(ctx *RenderingContext) []byte {
 }
 
 func orgRender(ctx *RenderingContext, c ContentSpec) []byte {
-	content := ctx.Content
-	cleanContent := bytes.Replace(content, []byte("# more"), []byte(""), 1)
-	return goorgeous.Org(cleanContent,
-		c.getHTMLRenderer(blackfriday.HTML_TOC, ctx))
+	config := org.New()
+	config.Log = jww.WARN
+	writer := org.NewHTMLWriter()
+	writer.HighlightCodeBlock = func(source, lang string) string {
+		highlightedSource, err := c.Highlight(source, lang, "")
+		if err != nil {
+			jww.ERROR.Printf("Could not highlight source as lang %s. Using raw source.", lang)
+			return source
+		}
+		return highlightedSource
+	}
+
+	html, err := config.Parse(bytes.NewReader(ctx.Content), ctx.DocumentName).Write(writer)
+	if err != nil {
+		jww.ERROR.Printf("Could not render org: %s. Using unrendered content.", err)
+		return ctx.Content
+	}
+	return []byte(html)
 }
 
 func externallyRenderContent(ctx *RenderingContext, path string, args []string) []byte {

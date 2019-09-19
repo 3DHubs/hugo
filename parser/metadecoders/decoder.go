@@ -21,12 +21,13 @@ import (
 	"strings"
 
 	"github.com/gohugoio/hugo/common/herrors"
+	"github.com/niklasfasching/go-org/org"
 
 	"github.com/BurntSushi/toml"
-	"github.com/chaseadamsio/goorgeous"
 	"github.com/pkg/errors"
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
+	jww "github.com/spf13/jwalterweatherman"
 	yaml "gopkg.in/yaml.v2"
 )
 
@@ -81,6 +82,32 @@ func (d Decoder) UnmarshalFileToMap(fs afero.Fs, filename string) (map[string]in
 	return d.UnmarshalToMap(data, format)
 }
 
+// UnmarshalStringTo tries to unmarshal data to a new instance of type typ.
+func (d Decoder) UnmarshalStringTo(data string, typ interface{}) (interface{}, error) {
+	data = strings.TrimSpace(data)
+	// We only check for the possible types in YAML, JSON and TOML.
+	switch typ.(type) {
+	case string:
+		return data, nil
+	case map[string]interface{}:
+		format := d.FormatFromContentString(data)
+		return d.UnmarshalToMap([]byte(data), format)
+	case []interface{}:
+		// A standalone slice. Let YAML handle it.
+		return d.Unmarshal([]byte(data), YAML)
+	case bool:
+		return cast.ToBoolE(data)
+	case int:
+		return cast.ToIntE(data)
+	case int64:
+		return cast.ToInt64E(data)
+	case float64:
+		return cast.ToFloat64E(data)
+	default:
+		return nil, errors.Errorf("unmarshal: %T not supportedd", typ)
+	}
+}
+
 // Unmarshal will unmarshall data in format f into an interface{}.
 // This is what's needed for Hugo's /data handling.
 func (d Decoder) Unmarshal(data []byte, f Format) (interface{}, error) {
@@ -106,16 +133,7 @@ func (d Decoder) unmarshal(data []byte, f Format, v interface{}) error {
 
 	switch f {
 	case ORG:
-		vv, err := goorgeous.OrgHeaders(data)
-		if err != nil {
-			return toFileError(f, errors.Wrap(err, "failed to unmarshal ORG headers"))
-		}
-		switch v.(type) {
-		case *map[string]interface{}:
-			*v.(*map[string]interface{}) = vv
-		default:
-			*v.(*interface{}) = vv
-		}
+		err = d.unmarshalORG(data, v)
 	case JSON:
 		err = json.Unmarshal(data, v)
 	case TOML:
@@ -183,6 +201,34 @@ func (d Decoder) unmarshalCSV(data []byte, v interface{}) error {
 
 	return nil
 
+}
+
+func (d Decoder) unmarshalORG(data []byte, v interface{}) error {
+	config := org.New()
+	config.Log = jww.WARN
+	document := config.Parse(bytes.NewReader(data), "")
+	if document.Error != nil {
+		return document.Error
+	}
+	frontMatter := make(map[string]interface{}, len(document.BufferSettings))
+	for k, v := range document.BufferSettings {
+		k = strings.ToLower(k)
+		if strings.HasSuffix(k, "[]") {
+			frontMatter[k[:len(k)-2]] = strings.Fields(v)
+		} else if k == "tags" || k == "categories" || k == "aliases" {
+			jww.WARN.Printf("Please use '#+%s[]:' notation, automatic conversion is deprecated.", k)
+			frontMatter[k] = strings.Fields(v)
+		} else {
+			frontMatter[k] = v
+		}
+	}
+	switch v.(type) {
+	case *map[string]interface{}:
+		*v.(*map[string]interface{}) = frontMatter
+	default:
+		*v.(*interface{}) = frontMatter
+	}
+	return nil
 }
 
 func toFileError(f Format, err error) error {

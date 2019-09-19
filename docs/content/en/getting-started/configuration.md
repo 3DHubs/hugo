@@ -38,7 +38,7 @@ hugo --config a.toml,b.toml,c.toml
 Multiple site config files can be specified as a comma-separated string to the `--config` switch.
 {{% /note %}}
 
-TODO: distinct config.toml and others (the root object files)
+{{< todo >}}TODO: distinct config.toml and others (the root object files){{< /todo >}}
 
 ## Configuration Directory
 
@@ -76,10 +76,10 @@ value in parentheses. Users may choose to override those values in their site
 config file(s).
 
 archetypeDir ("archetypes")
-: The directory where Hugo finds archetype files (content templates).
+: The directory where Hugo finds archetype files (content templates). {{% module-mounts-note %}}
 
 assetDir ("assets")
-: The directory where Hugo finds asset files used in [Hugo Pipes](/hugo-pipes/).
+: The directory where Hugo finds asset files used in [Hugo Pipes](/hugo-pipes/). {{% module-mounts-note %}}
 
 baseURL
 : Hostname (and path) to the root, e.g. http://bep.is/
@@ -103,10 +103,10 @@ canonifyURLs (false)
 : Enable to turn relative URLs into absolute.
 
 contentDir ("content")
-: The directory from where Hugo reads content files.
+: The directory from where Hugo reads content files. {{% module-mounts-note %}}
 
 dataDir ("data")
-: The directory from where Hugo reads data files.
+: The directory from where Hugo reads data files. {{% module-mounts-note %}}
 
 defaultContentLanguage ("en")
 : Content without language indicator will default to this language.
@@ -115,7 +115,7 @@ defaultContentLanguageInSubdir (false)
 : Render the default content language in subdir, e.g. `content/en/`. The site root `/` will then redirect to `/en/`.
 
 disableAliases (false)
-: Will disable generation of alias redirects. Note that even if `disableAliases` is set, the aliases themselves are preserved on the page. The motivation with this is to be able to generate 301 redirects in an `.htacess`, a Netlify `_redirects` file or similar using a custom output format.
+: Will disable generation of alias redirects. Note that even if `disableAliases` is set, the aliases themselves are preserved on the page. The motivation with this is to be able to generate 301 redirects in an `.htaccess`, a Netlify `_redirects` file or similar using a custom output format.
 
 disableHugoGeneratorInject (false)
 : Hugo will, by default, inject a generator meta tag in the HTML head on the _home page only_. You can turn it off, but we would really appreciate if you don't, as this is a good way to watch Hugo's popularity on the rise.
@@ -190,6 +190,9 @@ menu
 metaDataFormat ("toml")
 : Front matter meta-data format. Valid values: `"toml"`, `"yaml"`, or `"json"`.
 
+module
+: Module config see [Module Config](/hugo-modules/configuration/).
+
 newContentEditor ("")
 : The editor to use when creating new content.
 
@@ -245,10 +248,7 @@ sitemap
 : Default [sitemap configuration](/templates/sitemap-template/#configure-sitemap-xml).
 
 staticDir ("static")
-: A directory or a list of directories from where Hugo reads [static files][static-files].
-
-stepAnalysis (false)
-: Display memory and timing of different steps of the program.
+: A directory or a list of directories from where Hugo reads [static files][static-files]. {{% module-mounts-note %}}
 
 summaryLength (70)
 : The length of text in words to show in a [`.Summary`](/content-management/summaries/#hugo-defined-automatic-summary-splitting).
@@ -267,6 +267,9 @@ timeout (10000)
 
 title ("")
 : Site title.
+
+titleCaseStyle ("AP")
+: See [Configure Title Case](#configure-title-case)
 
 uglyURLs (false)
 : When enabled, creates URL of the form `/filename.html` instead of `/filename/`.
@@ -293,6 +296,10 @@ which shows output like
 enableemoji: true
 ```
 {{% /note %}}
+
+## Configure Title Case
+
+Set `titleCaseStyle` to specify the title style used by the [title](/functions/title/) template function and the automatic section titles in Hugo. It defaults to [AP Stylebook](https://www.apstylebook.com/) for title casing, but you can also set it to `Chicago` or `Go` (every word starts with a capital letter).
 
 ## Configuration Environment Variables
 
@@ -466,8 +473,10 @@ maxAge = -1
 [caches.assets]
 dir = ":resourceDir/_gen"
 maxAge = -1
+[caches.modules]
+dir = ":cacheDir/modules"
+maxAge = -1
 ```
-
 
 You can override any of these cache setting in your own `config.toml`.
 
@@ -501,5 +510,5 @@ dir
 [Output Formats]: /templates/output-formats/
 [templates]: /templates/
 [toml]: https://github.com/toml-lang/toml
-[yaml]: http://yaml.org/spec/
+[yaml]: https://yaml.org/spec/
 [static-files]: /content-management/static-files/

@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/cast"
 )
 
-var comp = compare.New()
+var sortComp = compare.New(true)
 
 // Sort returns a sorted sequence.
 func (ns *Namespace) Sort(seq interface{}, args ...interface{}) (interface{}, error) {
@@ -31,21 +31,23 @@ func (ns *Namespace) Sort(seq interface{}, args ...interface{}) (interface{}, er
 		return nil, errors.New("sequence must be provided")
 	}
 
-	seqv := reflect.ValueOf(seq)
-	seqv, isNil := indirect(seqv)
+	seqv, isNil := indirect(reflect.ValueOf(seq))
 	if isNil {
 		return nil, errors.New("can't iterate over a nil value")
 	}
 
+	var sliceType reflect.Type
 	switch seqv.Kind() {
-	case reflect.Array, reflect.Slice, reflect.Map:
-		// ok
+	case reflect.Array, reflect.Slice:
+		sliceType = seqv.Type()
+	case reflect.Map:
+		sliceType = reflect.SliceOf(seqv.Type().Elem())
 	default:
 		return nil, errors.New("can't sort " + reflect.ValueOf(seq).Type().String())
 	}
 
 	// Create a list of pairs that will be used to do the sort
-	p := pairList{SortAsc: true, SliceType: reflect.SliceOf(seqv.Type().Elem())}
+	p := pairList{SortAsc: true, SliceType: sliceType}
 	p.Pairs = make([]pair, seqv.Len())
 
 	var sortByField string
@@ -131,15 +133,15 @@ func (p pairList) Less(i, j int) bool {
 	if iv.IsValid() {
 		if jv.IsValid() {
 			// can only call Interface() on valid reflect Values
-			return comp.Lt(iv.Interface(), jv.Interface())
+			return sortComp.Lt(iv.Interface(), jv.Interface())
 		}
 		// if j is invalid, test i against i's zero value
-		return comp.Lt(iv.Interface(), reflect.Zero(iv.Type()))
+		return sortComp.Lt(iv.Interface(), reflect.Zero(iv.Type()))
 	}
 
 	if jv.IsValid() {
 		// if i is invalid, test j against j's zero value
-		return comp.Lt(reflect.Zero(jv.Type()), jv.Interface())
+		return sortComp.Lt(reflect.Zero(jv.Type()), jv.Interface())
 	}
 
 	return false

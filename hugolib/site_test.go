@@ -20,14 +20,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
+
 	"github.com/markbates/inflect"
 
 	"github.com/gohugoio/hugo/helpers"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/resources/page"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -145,6 +146,7 @@ func TestLastChange(t *testing.T) {
 	t.Parallel()
 
 	cfg, fs := newTestCfg()
+	c := qt.New(t)
 
 	writeSource(t, fs, filepath.Join("content", "sect/doc1.md"), "---\ntitle: doc1\nweight: 1\ndate: 2014-05-29\n---\n# doc1\n*some content*")
 	writeSource(t, fs, filepath.Join("content", "sect/doc2.md"), "---\ntitle: doc2\nweight: 2\ndate: 2015-05-29\n---\n# doc2\n*some content*")
@@ -154,8 +156,8 @@ func TestLastChange(t *testing.T) {
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{SkipRender: true})
 
-	require.False(t, s.Info.LastChange().IsZero(), "Site.LastChange is zero")
-	require.Equal(t, 2017, s.Info.LastChange().Year(), "Site.LastChange should be set to the page with latest Lastmod (year 2017)")
+	c.Assert(s.Info.LastChange().IsZero(), qt.Equals, false)
+	c.Assert(s.Info.LastChange().Year(), qt.Equals, 2017)
 }
 
 // Issue #_index
@@ -163,12 +165,13 @@ func TestPageWithUnderScoreIndexInFilename(t *testing.T) {
 	t.Parallel()
 
 	cfg, fs := newTestCfg()
+	c := qt.New(t)
 
 	writeSource(t, fs, filepath.Join("content", "sect/my_index_file.md"), "---\ntitle: doc1\nweight: 1\ndate: 2014-05-29\n---\n# doc1\n*some content*")
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{SkipRender: true})
 
-	require.Len(t, s.RegularPages(), 1)
+	c.Assert(len(s.RegularPages()), qt.Equals, 1)
 
 }
 
@@ -183,6 +186,8 @@ func TestCrossrefs(t *testing.T) {
 }
 
 func doTestCrossrefs(t *testing.T, relative, uglyURLs bool) {
+
+	c := qt.New(t)
 
 	baseURL := "http://foo/bar"
 
@@ -253,9 +258,9 @@ THE END.`, refShortcode),
 			WithTemplate: createWithTemplateFromNameValues("_default/single.html", "{{.Content}}")},
 		BuildCfg{})
 
-	require.Len(t, s.RegularPages(), 4)
+	c.Assert(len(s.RegularPages()), qt.Equals, 4)
 
-	th := testHelper{s.Cfg, s.Fs, t}
+	th := newTestHelper(s.Cfg, s.Fs, t)
 
 	tests := []struct {
 		doc      string
@@ -286,6 +291,7 @@ func TestShouldAlwaysHaveUglyURLs(t *testing.T) {
 func doTestShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
 
 	cfg, fs := newTestCfg()
+	c := qt.New(t)
 
 	cfg.Set("verbose", true)
 	cfg.Set("baseURL", "http://auth/bub")
@@ -333,7 +339,7 @@ func doTestShouldAlwaysHaveUglyURLs(t *testing.T, uglyURLs bool) {
 	}
 
 	for _, p := range s.RegularPages() {
-		assert.False(t, p.IsHome())
+		c.Assert(p.IsHome(), qt.Equals, false)
 	}
 
 	for _, test := range tests {
@@ -355,18 +361,76 @@ func TestShouldNotWriteZeroLengthFilesToDestination(t *testing.T) {
 	writeSource(t, fs, filepath.Join("layouts", "_default/list.html"), "")
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
-	th := testHelper{s.Cfg, s.Fs, t}
+	th := newTestHelper(s.Cfg, s.Fs, t)
 
 	th.assertFileNotExist(filepath.Join("public", "index.html"))
 }
 
+func TestMainSections(t *testing.T) {
+	c := qt.New(t)
+	for _, paramSet := range []bool{false, true} {
+		c.Run(fmt.Sprintf("param-%t", paramSet), func(c *qt.C) {
+			v := viper.New()
+			if paramSet {
+				v.Set("params", map[string]interface{}{
+					"mainSections": []string{"a1", "a2"},
+				})
+			}
+
+			b := newTestSitesBuilder(c).WithViper(v)
+
+			for i := 0; i < 20; i++ {
+				b.WithContent(fmt.Sprintf("page%d.md", i), `---
+title: "Page"
+---
+`)
+			}
+
+			for i := 0; i < 5; i++ {
+				b.WithContent(fmt.Sprintf("blog/page%d.md", i), `---
+title: "Page"
+tags: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+---
+`)
+			}
+
+			for i := 0; i < 3; i++ {
+				b.WithContent(fmt.Sprintf("docs/page%d.md", i), `---
+title: "Page"
+---
+`)
+			}
+
+			b.WithTemplates("index.html", `
+mainSections: {{ .Site.Params.mainSections }}
+
+{{ range (where .Site.RegularPages "Type" "in" .Site.Params.mainSections) }}
+Main section page: {{ .RelPermalink }}
+{{ end }}
+`)
+
+			b.Build(BuildCfg{})
+
+			if paramSet {
+				b.AssertFileContent("public/index.html", "mainSections: [a1 a2]")
+			} else {
+				b.AssertFileContent("public/index.html", "mainSections: [blog]", "Main section page: /blog/page3/")
+			}
+
+		})
+	}
+}
+
 // Issue #1176
 func TestSectionNaming(t *testing.T) {
-	t.Parallel()
 	for _, canonify := range []bool{true, false} {
 		for _, uglify := range []bool{true, false} {
 			for _, pluralize := range []bool{true, false} {
+				canonify := canonify
+				uglify := uglify
+				pluralize := pluralize
 				t.Run(fmt.Sprintf("canonify=%t,uglify=%t,pluralize=%t", canonify, uglify, pluralize), func(t *testing.T) {
+					t.Parallel()
 					doTestSectionNaming(t, canonify, uglify, pluralize)
 				})
 			}
@@ -375,6 +439,7 @@ func TestSectionNaming(t *testing.T) {
 }
 
 func doTestSectionNaming(t *testing.T, canonify, uglify, pluralize bool) {
+	c := qt.New(t)
 
 	var expectedPathSuffix string
 
@@ -409,10 +474,10 @@ func doTestSectionNaming(t *testing.T, canonify, uglify, pluralize bool) {
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
 
 	mainSections, err := s.Info.Param("mainSections")
-	require.NoError(t, err)
-	require.Equal(t, []string{"sect"}, mainSections)
+	c.Assert(err, qt.IsNil)
+	c.Assert(mainSections, qt.DeepEquals, []string{"sect"})
 
-	th := testHelper{s.Cfg, s.Fs, t}
+	th := newTestHelper(s.Cfg, s.Fs, t)
 	tests := []struct {
 		doc         string
 		pluralAware bool
@@ -524,7 +589,7 @@ func TestAbsURLify(t *testing.T) {
 			writeSource(t, fs, filepath.Join("layouts", "blue/single.html"), templateWithURLAbs)
 
 			s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
-			th := testHelper{s.Cfg, s.Fs, t}
+			th := newTestHelper(s.Cfg, s.Fs, t)
 
 			tests := []struct {
 				file, expected string

@@ -14,15 +14,16 @@
 package deploy
 
 import (
+	"fmt"
 	"testing"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/config"
 	"github.com/spf13/viper"
-	"github.com/stretchr/testify/require"
 )
 
 func TestDecodeConfigFromTOML(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	tomlConfig := `
 
@@ -32,68 +33,86 @@ someOtherValue = "foo"
 
 order = ["o1", "o2"]
 
+# All lowercase.
 [[deployment.targets]]
-Name = "name1"
-URL = "url1"
-CloudFrontDistributionID = "cdn1"
+name = "name0"
+url = "url0"
+cloudfrontdistributionid = "cdn0"
 
+# All uppercase.
+[[deployment.targets]]
+NAME = "name1"
+URL = "url1"
+CLOUDFRONTDISTRIBUTIONID = "cdn1"
+
+# Camelcase.
 [[deployment.targets]]
 name = "name2"
 url = "url2"
-cloudfrontdistributionid = "cdn2"
+cloudFrontDistributionID = "cdn2"
 
+# All lowercase.
 [[deployment.matchers]]
-Pattern = "^pattern1$"
-Cache-Control = "cachecontrol1"
-Content-Encoding = "contentencoding1"
-Content-Type = "contenttype1"
-Gzip = true
-Force = true
+pattern = "^pattern0$"
+cachecontrol = "cachecontrol0"
+contentencoding = "contentencoding0"
+contenttype = "contenttype0"
 
+# All uppercase.
+[[deployment.matchers]]
+PATTERN = "^pattern1$"
+CACHECONTROL = "cachecontrol1"
+CONTENTENCODING = "contentencoding1"
+CONTENTTYPE = "contenttype1"
+GZIP = true
+FORCE = true
+
+# Camelcase.
 [[deployment.matchers]]
 pattern = "^pattern2$"
-cache-control = "cachecontrol2"
-content-encoding = "contentencoding2"
-content-type = "contenttype2"
+cacheControl = "cachecontrol2"
+contentEncoding = "contentencoding2"
+contentType = "contenttype2"
+gzip = true
+force = true
 `
 	cfg, err := config.FromConfigString(tomlConfig, "toml")
-	assert.NoError(err)
+	c.Assert(err, qt.IsNil)
 
 	dcfg, err := decodeConfig(cfg)
-	assert.NoError(err)
+	c.Assert(err, qt.IsNil)
 
-	assert.Equal(2, len(dcfg.Order))
-	assert.Equal("o1", dcfg.Order[0])
-	assert.Equal("o2", dcfg.Order[1])
-	assert.Equal(2, len(dcfg.ordering))
+	// Order.
+	c.Assert(len(dcfg.Order), qt.Equals, 2)
+	c.Assert(dcfg.Order[0], qt.Equals, "o1")
+	c.Assert(dcfg.Order[1], qt.Equals, "o2")
+	c.Assert(len(dcfg.ordering), qt.Equals, 2)
 
-	assert.Equal(2, len(dcfg.Targets))
-	assert.Equal("name1", dcfg.Targets[0].Name)
-	assert.Equal("url1", dcfg.Targets[0].URL)
-	assert.Equal("cdn1", dcfg.Targets[0].CloudFrontDistributionID)
-	assert.Equal("name2", dcfg.Targets[1].Name)
-	assert.Equal("url2", dcfg.Targets[1].URL)
-	assert.Equal("cdn2", dcfg.Targets[1].CloudFrontDistributionID)
+	// Targets.
+	c.Assert(len(dcfg.Targets), qt.Equals, 3)
+	for i := 0; i < 3; i++ {
+		tgt := dcfg.Targets[i]
+		c.Assert(tgt.Name, qt.Equals, fmt.Sprintf("name%d", i))
+		c.Assert(tgt.URL, qt.Equals, fmt.Sprintf("url%d", i))
+		c.Assert(tgt.CloudFrontDistributionID, qt.Equals, fmt.Sprintf("cdn%d", i))
+	}
 
-	assert.Equal(2, len(dcfg.Matchers))
-	assert.Equal("^pattern1$", dcfg.Matchers[0].Pattern)
-	assert.NotNil(dcfg.Matchers[0].re)
-	assert.Equal("cachecontrol1", dcfg.Matchers[0].CacheControl)
-	assert.Equal("contentencoding1", dcfg.Matchers[0].ContentEncoding)
-	assert.Equal("contenttype1", dcfg.Matchers[0].ContentType)
-	assert.True(dcfg.Matchers[0].Gzip)
-	assert.True(dcfg.Matchers[0].Force)
-	assert.Equal("^pattern2$", dcfg.Matchers[1].Pattern)
-	assert.NotNil(dcfg.Matchers[1].re)
-	assert.Equal("cachecontrol2", dcfg.Matchers[1].CacheControl)
-	assert.Equal("contentencoding2", dcfg.Matchers[1].ContentEncoding)
-	assert.Equal("contenttype2", dcfg.Matchers[1].ContentType)
-	assert.False(dcfg.Matchers[1].Gzip)
-	assert.False(dcfg.Matchers[1].Force)
+	// Matchers.
+	c.Assert(len(dcfg.Matchers), qt.Equals, 3)
+	for i := 0; i < 3; i++ {
+		m := dcfg.Matchers[i]
+		c.Assert(m.Pattern, qt.Equals, fmt.Sprintf("^pattern%d$", i))
+		c.Assert(m.re, qt.Not(qt.IsNil))
+		c.Assert(m.CacheControl, qt.Equals, fmt.Sprintf("cachecontrol%d", i))
+		c.Assert(m.ContentEncoding, qt.Equals, fmt.Sprintf("contentencoding%d", i))
+		c.Assert(m.ContentType, qt.Equals, fmt.Sprintf("contenttype%d", i))
+		c.Assert(m.Gzip, qt.Equals, i != 0)
+		c.Assert(m.Force, qt.Equals, i != 0)
+	}
 }
 
 func TestInvalidOrderingPattern(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	tomlConfig := `
 
@@ -103,14 +122,14 @@ someOtherValue = "foo"
 order = ["["]  # invalid regular expression
 `
 	cfg, err := config.FromConfigString(tomlConfig, "toml")
-	assert.NoError(err)
+	c.Assert(err, qt.IsNil)
 
 	_, err = decodeConfig(cfg)
-	assert.Error(err)
+	c.Assert(err, qt.Not(qt.IsNil))
 }
 
 func TestInvalidMatcherPattern(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	tomlConfig := `
 
@@ -121,17 +140,17 @@ someOtherValue = "foo"
 Pattern = "["  # invalid regular expression
 `
 	cfg, err := config.FromConfigString(tomlConfig, "toml")
-	assert.NoError(err)
+	c.Assert(err, qt.IsNil)
 
 	_, err = decodeConfig(cfg)
-	assert.Error(err)
+	c.Assert(err, qt.Not(qt.IsNil))
 }
 
 func TestDecodeConfigDefault(t *testing.T) {
-	assert := require.New(t)
+	c := qt.New(t)
 
 	dcfg, err := decodeConfig(viper.New())
-	assert.NoError(err)
-	assert.Equal(0, len(dcfg.Targets))
-	assert.Equal(0, len(dcfg.Matchers))
+	c.Assert(err, qt.IsNil)
+	c.Assert(len(dcfg.Targets), qt.Equals, 0)
+	c.Assert(len(dcfg.Matchers), qt.Equals, 0)
 }

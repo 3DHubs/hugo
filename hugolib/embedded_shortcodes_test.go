@@ -26,8 +26,8 @@ import (
 
 	"github.com/gohugoio/hugo/deps"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/tpl"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -45,6 +45,7 @@ func TestShortcodeCrossrefs(t *testing.T) {
 func doTestShortcodeCrossrefs(t *testing.T, relative bool) {
 	var (
 		cfg, fs = newTestCfg()
+		c       = qt.New(t)
 	)
 
 	cfg.Set("baseURL", testBaseURL)
@@ -69,10 +70,10 @@ func doTestShortcodeCrossrefs(t *testing.T, relative bool) {
 
 	s := buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
 
-	require.Len(t, s.RegularPages(), 1)
+	c.Assert(len(s.RegularPages()), qt.Equals, 1)
 
 	content, err := s.RegularPages()[0].Content()
-	require.NoError(t, err)
+	c.Assert(err, qt.IsNil)
 	output := cast.ToString(content)
 
 	if !strings.Contains(output, expected) {
@@ -100,7 +101,7 @@ void do();
 
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		cfg.Set("pygmentsStyle", "bw")
@@ -148,7 +149,7 @@ func TestShortcodeFigure(t *testing.T) {
 
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		writeSource(t, fs, filepath.Join("content", "simple.md"), fmt.Sprintf(`---
@@ -172,22 +173,22 @@ func TestShortcodeYoutube(t *testing.T) {
 	}{
 		{
 			`{{< youtube w7Ft2ymGmfc >}}`,
-			"(?s)\n<div style=\".*?\">.*?<iframe src=\"//www.youtube.com/embed/w7Ft2ymGmfc\" style=\".*?\" allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>\n",
+			"(?s)\n<div style=\".*?\">.*?<iframe src=\"https://www.youtube.com/embed/w7Ft2ymGmfc\" style=\".*?\" allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>\n",
 		},
 		// set class
 		{
 			`{{< youtube w7Ft2ymGmfc video>}}`,
-			"(?s)\n<div class=\"video\">.*?<iframe src=\"//www.youtube.com/embed/w7Ft2ymGmfc\" allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>\n",
+			"(?s)\n<div class=\"video\">.*?<iframe src=\"https://www.youtube.com/embed/w7Ft2ymGmfc\" allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>\n",
 		},
 		// set class and autoplay (using named params)
 		{
 			`{{< youtube id="w7Ft2ymGmfc" class="video" autoplay="true" >}}`,
-			"(?s)\n<div class=\"video\">.*?<iframe src=\"//www.youtube.com/embed/w7Ft2ymGmfc\\?autoplay=1\".*?allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>",
+			"(?s)\n<div class=\"video\">.*?<iframe src=\"https://www.youtube.com/embed/w7Ft2ymGmfc\\?autoplay=1\".*?allowfullscreen title=\"YouTube Video\">.*?</iframe>.*?</div>",
 		},
 	} {
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		writeSource(t, fs, filepath.Join("content", "simple.md"), fmt.Sprintf(`---
@@ -211,22 +212,22 @@ func TestShortcodeVimeo(t *testing.T) {
 	}{
 		{
 			`{{< vimeo 146022717 >}}`,
-			"(?s)\n<div style=\".*?\">.*?<iframe src=\"//player.vimeo.com/video/146022717\" style=\".*?\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>\n",
+			"(?s)\n<div style=\".*?\">.*?<iframe src=\"https://player.vimeo.com/video/146022717\" style=\".*?\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>\n",
 		},
 		// set class
 		{
 			`{{< vimeo 146022717 video >}}`,
-			"(?s)\n<div class=\"video\">.*?<iframe src=\"//player.vimeo.com/video/146022717\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>\n",
+			"(?s)\n<div class=\"video\">.*?<iframe src=\"https://player.vimeo.com/video/146022717\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>\n",
 		},
 		// set class (using named params)
 		{
 			`{{< vimeo id="146022717" class="video" >}}`,
-			"(?s)^<div class=\"video\">.*?<iframe src=\"//player.vimeo.com/video/146022717\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>",
+			"(?s)^<div class=\"video\">.*?<iframe src=\"https://player.vimeo.com/video/146022717\" webkitallowfullscreen mozallowfullscreen allowfullscreen>.*?</iframe>.*?</div>",
 		},
 	} {
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		writeSource(t, fs, filepath.Join("content", "simple.md"), fmt.Sprintf(`---
@@ -250,16 +251,16 @@ func TestShortcodeGist(t *testing.T) {
 	}{
 		{
 			`{{< gist spf13 7896402 >}}`,
-			"(?s)^<script type=\"application/javascript\" src=\"//gist.github.com/spf13/7896402.js\"></script>",
+			"(?s)^<script type=\"application/javascript\" src=\"https://gist.github.com/spf13/7896402.js\"></script>",
 		},
 		{
 			`{{< gist spf13 7896402 "img.html" >}}`,
-			"(?s)^<script type=\"application/javascript\" src=\"//gist.github.com/spf13/7896402.js\\?file=img.html\"></script>",
+			"(?s)^<script type=\"application/javascript\" src=\"https://gist.github.com/spf13/7896402.js\\?file=img.html\"></script>",
 		},
 	} {
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		writeSource(t, fs, filepath.Join("content", "simple.md"), fmt.Sprintf(`---
@@ -302,7 +303,7 @@ func TestShortcodeTweet(t *testing.T) {
 
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		withTemplate := func(templ tpl.TemplateHandler) error {
@@ -357,7 +358,7 @@ func TestShortcodeInstagram(t *testing.T) {
 
 		var (
 			cfg, fs = newTestCfg()
-			th      = testHelper{cfg, fs, t}
+			th      = newTestHelper(cfg, fs, t)
 		)
 
 		withTemplate := func(templ tpl.TemplateHandler) error {

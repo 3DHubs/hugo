@@ -159,11 +159,11 @@ func (d *Deps) TemplateHandler() tpl.TemplateHandler {
 func (d *Deps) LoadResources() error {
 	// Note that the translations need to be loaded before the templates.
 	if err := d.translationProvider.Update(d); err != nil {
-		return err
+		return errors.Wrap(err, "loading translations")
 	}
 
 	if err := d.templateProvider.Update(d); err != nil {
-		return err
+		return errors.Wrap(err, "loading templates")
 	}
 
 	return nil
@@ -207,10 +207,10 @@ func New(cfg DepsCfg) (*Deps, error) {
 		cfg.OutputFormats = output.DefaultFormats
 	}
 
-	ps, err := helpers.NewPathSpec(fs, cfg.Language)
+	ps, err := helpers.NewPathSpec(fs, cfg.Language, logger)
 
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "create PathSpec")
 	}
 
 	fileCaches, err := filecache.NewCaches(ps)
@@ -272,7 +272,7 @@ func (d Deps) ForLanguage(cfg DepsCfg, onCreated func(d *Deps) error) (*Deps, er
 	l := cfg.Language
 	var err error
 
-	d.PathSpec, err = helpers.NewPathSpecWithBaseBaseFsProvided(d.Fs, l, d.BaseFs)
+	d.PathSpec, err = helpers.NewPathSpecWithBaseBaseFsProvided(d.Fs, l, d.Log, d.BaseFs)
 	if err != nil {
 		return nil, err
 	}

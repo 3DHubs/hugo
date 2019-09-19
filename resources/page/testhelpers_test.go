@@ -16,9 +16,10 @@ package page
 import (
 	"fmt"
 	"html/template"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/gohugoio/hugo/modules"
 
 	"github.com/bep/gitmap"
 	"github.com/gohugoio/hugo/helpers"
@@ -65,8 +66,14 @@ func newTestPathSpec() *helpers.PathSpec {
 
 func newTestPathSpecFor(cfg config.Provider) *helpers.PathSpec {
 	config.SetBaseTestDefaults(cfg)
+	langs.LoadLanguageSettings(cfg, nil)
+	mod, err := modules.CreateProjectModule(cfg)
+	if err != nil {
+		panic(err)
+	}
+	cfg.Set("allModules", modules.Modules{mod})
 	fs := hugofs.NewMem(cfg)
-	s, err := helpers.NewPathSpec(fs, cfg)
+	s, err := helpers.NewPathSpec(fs, cfg, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -189,7 +196,7 @@ func (p *testPage) File() source.File {
 	return p.file
 }
 
-func (p *testPage) FileInfo() os.FileInfo {
+func (p *testPage) FileInfo() hugofs.FileMetaInfo {
 	panic("not implemented")
 }
 
@@ -341,6 +348,10 @@ func (p *testPage) OutputFormats() OutputFormats {
 }
 
 func (p *testPage) Pages() Pages {
+	panic("not implemented")
+}
+
+func (p *testPage) RegularPages() Pages {
 	panic("not implemented")
 }
 

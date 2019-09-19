@@ -44,9 +44,11 @@ func newDeployCmd() *deployCmd {
 	cc.baseCmd = newBaseCmd(&cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy your site to a Cloud provider.",
-		// TODO: improve Long docstring.
-		// TODO: update real documentation. Is it in ../docs/ or in hugoDocs?
-		Long: `Deploy your site to a Cloud provider.`,
+		Long: `Deploy your site to a Cloud provider.
+
+See https://gohugo.io/hosting-and-deployment/hugo-deploy/ for detailed
+documentation.
+`,
 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfgInit := func(c *commandeer) error {
@@ -56,7 +58,7 @@ func newDeployCmd() *deployCmd {
 			if err != nil {
 				return err
 			}
-			deployer, err := deploy.New(comm.Cfg, comm.hugo.PathSpec.PublishFs)
+			deployer, err := deploy.New(comm.Cfg, comm.hugo().PathSpec.PublishFs)
 			if err != nil {
 				return err
 			}
@@ -64,11 +66,11 @@ func newDeployCmd() *deployCmd {
 		},
 	})
 
-	cc.cmd.Flags().String("target", "default", "target deployment from deployments section in config file")
+	cc.cmd.Flags().String("target", "", "target deployment from deployments section in config file; defaults to the first one")
 	cc.cmd.Flags().Bool("confirm", false, "ask for confirmation before making changes to the target")
 	cc.cmd.Flags().Bool("dryRun", false, "dry run")
 	cc.cmd.Flags().Bool("force", false, "force upload of all files")
-	cc.cmd.Flags().Bool("invalidateCDN", true, "invalidate the CDN cache via the CloudFrontDistributionID listed in the deployment target")
+	cc.cmd.Flags().Bool("invalidateCDN", true, "invalidate the CDN cache via the cloudFrontDistributionID listed in the deployment target")
 	cc.cmd.Flags().Int("maxDeletes", 256, "maximum # of files to delete, or -1 to disable")
 
 	return cc

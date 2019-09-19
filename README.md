@@ -1,4 +1,4 @@
-![Hugo](https://raw.githubusercontent.com/gohugoio/hugoDocs/master/static/img/hugo-logo.png)
+<img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/static/images/hugo-logo-wide.svg?sanitize=true" alt="Hugo" width="565">
 
 A Fast and Flexible Static Site Generator built with love by [bep](https://github.com/bep), [spf13](http://spf13.com/) and [friends](https://github.com/gohugoio/hugo/graphs/contributors) in [Go][].
 
@@ -132,7 +132,7 @@ Hugo stands on the shoulder of many great open source libraries, in lexical orde
  | [github.com/bep/debounce](https://github.com/bep/debounce) |    MIT License |
  | [github.com/bep/gitmap](https://github.com/bep/gitmap) |  MIT License |
  | [github.com/bep/go-tocss](https://github.com/bep/go-tocss) | MIT License |
- | [github.com/chaseadamsio/goorgeous](https://github.com/chaseadamsio/goorgeous) | MIT License |
+ | [github.com/niklasfasching/go-org](https://github.com/niklasfasching/go-org) | MIT License |
  | [github.com/cpuguy83/go-md2man](https://github.com/cpuguy83/go-md2man) | MIT License |
  | [github.com/danwakefield/fnmatch](https://github.com/danwakefield/fnmatch) | BSD 2-Clause "Simplified" License |
  | [github.com/disintegration/imaging](https://github.com/disintegration/imaging) |  MIT License |

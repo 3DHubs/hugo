@@ -20,15 +20,14 @@ import (
 	"testing"
 
 	"github.com/gohugoio/hugo/helpers"
-	"github.com/spf13/afero"
 
-	"github.com/stretchr/testify/require"
+	qt "github.com/frankban/quicktest"
 )
 
 func TestSiteStats(t *testing.T) {
 	t.Parallel()
 
-	assert := require.New(t)
+	c := qt.New(t)
 
 	siteConfig := `
 baseURL = "http://example.com/blog"
@@ -60,30 +59,28 @@ aliases: [/Ali%d]
 # Doc
 `
 
-	th, h := newTestSitesFromConfig(t, afero.NewMemMapFs(), siteConfig,
-		"layouts/_default/single.html", "Single|{{ .Title }}|{{ .Content }}",
-		"layouts/_default/list.html", `List|{{ .Title }}|Pages: {{ .Paginator.TotalPages }}|{{ .Content }}`,
-		"layouts/_default/terms.html", "Terms List|{{ .Title }}|{{ .Content }}",
-	)
-	require.Len(t, h.Sites, 2)
+	b := newTestSitesBuilder(t).WithConfigFile("toml", siteConfig)
 
-	fs := th.Fs
+	b.WithTemplates(
+		"_default/single.html", "Single|{{ .Title }}|{{ .Content }}",
+		"_default/list.html", `List|{{ .Title }}|Pages: {{ .Paginator.TotalPages }}|{{ .Content }}`,
+		"_default/terms.html", "Terms List|{{ .Title }}|{{ .Content }}",
+	)
 
 	for i := 0; i < 2; i++ {
 		for j := 0; j < 2; j++ {
 			pageID := i + j + 1
-			writeSource(t, fs, fmt.Sprintf("content/sect/p%d.md", pageID),
+			b.WithContent(fmt.Sprintf("content/sect/p%d.md", pageID),
 				fmt.Sprintf(pageTemplate, pageID, fmt.Sprintf("- tag%d", j), fmt.Sprintf("- category%d", j), pageID))
 		}
 	}
 
 	for i := 0; i < 5; i++ {
-		writeSource(t, fs, fmt.Sprintf("content/assets/image%d.png", i+1), "image")
+		b.WithContent(fmt.Sprintf("assets/image%d.png", i+1), "image")
 	}
 
-	err := h.Build(BuildCfg{})
-
-	assert.NoError(err)
+	b.Build(BuildCfg{})
+	h := b.H
 
 	stats := []*helpers.ProcessingStats{
 		h.Sites[0].PathSpec.ProcessingStats,
@@ -96,6 +93,6 @@ aliases: [/Ali%d]
 
 	helpers.ProcessingStatsTable(&buff, stats...)
 
-	assert.Contains(buff.String(), "Pages            | 19 |  6")
+	c.Assert(buff.String(), qt.Contains, "Pages            | 19 |  6")
 
 }

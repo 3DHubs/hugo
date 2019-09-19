@@ -16,7 +16,6 @@ package hugolib
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 
 	"reflect"
 
@@ -26,16 +25,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
-
-	"github.com/spf13/afero"
-
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/tpl"
 	"github.com/spf13/cast"
 
-	"github.com/stretchr/testify/require"
+	qt "github.com/frankban/quicktest"
 )
 
 func CheckShortCodeMatch(t *testing.T, input, expected string, withTemplate func(templ tpl.TemplateHandler) error) {
@@ -45,6 +40,7 @@ func CheckShortCodeMatch(t *testing.T, input, expected string, withTemplate func
 func CheckShortCodeMatchAndError(t *testing.T, input, expected string, withTemplate func(templ tpl.TemplateHandler) error, expectError bool) {
 
 	cfg, fs := newTestCfg()
+	c := qt.New(t)
 
 	// Need some front matter, see https://github.com/gohugoio/hugo/issues/2337
 	contentFile := `---
@@ -54,12 +50,8 @@ title: "Title"
 
 	writeSource(t, fs, "content/simple.md", contentFile)
 
-	h, err := NewHugoSites(deps.DepsCfg{Fs: fs, Cfg: cfg, WithTemplate: withTemplate})
-
-	require.NoError(t, err)
-	require.Len(t, h.Sites, 1)
-
-	err = h.Build(BuildCfg{})
+	b := newTestSitesBuilderFromDepsCfg(t, deps.DepsCfg{Fs: fs, Cfg: cfg, WithTemplate: withTemplate}).WithNothingAdded()
+	err := b.BuildE(BuildCfg{})
 
 	if err != nil && !expectError {
 		t.Fatalf("Shortcode rendered error %s.", err)
@@ -69,7 +61,10 @@ title: "Title"
 		t.Fatalf("No error from shortcode")
 	}
 
-	require.Len(t, h.Sites[0].RegularPages(), 1)
+	h := b.H
+	c.Assert(len(h.Sites), qt.Equals, 1)
+
+	c.Assert(len(h.Sites[0].RegularPages()), qt.Equals, 1)
 
 	output := strings.TrimSpace(content(h.Sites[0].RegularPages()[0]))
 	output = strings.TrimPrefix(output, "<p>")
@@ -78,7 +73,7 @@ title: "Title"
 	expected = strings.TrimSpace(expected)
 
 	if output != expected {
-		Fatalf(t, "Shortcode render didn't match. got \n%q but expected \n%q", output, expected)
+		t.Fatalf("Shortcode render didn't match. got \n%q but expected \n%q", output, expected)
 	}
 }
 
@@ -341,7 +336,6 @@ func TestShortcodeWrappedInPIssue(t *testing.T) {
 }
 
 func TestExtractShortcodes(t *testing.T) {
-	t.Parallel()
 	b := newTestSitesBuilder(t).WithSimpleConfigFile()
 
 	b.WithTemplates(
@@ -364,8 +358,8 @@ title: "Shortcodes Galore!"
 
 	/*errCheck := func(s string) func(name string, assert *require.Assertions, shortcode *shortcode, err error) {
 		return func(name string, assert *require.Assertions, shortcode *shortcode, err error) {
-			assert.Error(err, name)
-			assert.Equal(s, err.Error(), name)
+			c.Assert(err, name, qt.Not(qt.IsNil))
+			c.Assert(err.Error(), name, qt.Equals, s)
 		}
 	}*/
 
@@ -380,18 +374,18 @@ title: "Shortcodes Galore!"
 			s.name, s.isInline, s.isClosing, s.inner, s.params, s.ordinal, s.doMarkup, s.info.Config.Version, s.pos))
 	}
 
-	regexpCheck := func(re string) func(assert *require.Assertions, shortcode *shortcode, err error) {
-		return func(assert *require.Assertions, shortcode *shortcode, err error) {
-			assert.NoError(err)
-			got := str(shortcode)
-			assert.Regexp(regexp.MustCompile(re), got, got)
+	regexpCheck := func(re string) func(c *qt.C, shortcode *shortcode, err error) {
+		return func(c *qt.C, shortcode *shortcode, err error) {
+			c.Assert(err, qt.IsNil)
+			c.Assert(str(shortcode), qt.Matches, ".*"+re+".*")
+
 		}
 	}
 
 	for _, test := range []struct {
 		name  string
 		input string
-		check func(assert *require.Assertions, shortcode *shortcode, err error)
+		check func(c *qt.C, shortcode *shortcode, err error)
 	}{
 		{"one shortcode, no markup", "{{< tag >}}", regexpCheck("tag.*closing:false.*markup:false")},
 		{"one shortcode, markup", "{{% tag %}}", regexpCheck("tag.*closing:false.*markup:true;version:2")},
@@ -413,8 +407,11 @@ title: "Shortcodes Galore!"
 		{"inline", `{{< my.inline >}}Hi{{< /my.inline >}}`, regexpCheck("my.inline;inline:true;closing:true;inner:{Hi};")},
 	} {
 
+		test := test
+
 		t.Run(test.name, func(t *testing.T) {
-			assert := require.New(t)
+			t.Parallel()
+			c := qt.New(t)
 
 			counter := 0
 			placeholderFunc := func() string {
@@ -423,13 +420,13 @@ title: "Shortcodes Galore!"
 			}
 
 			p, err := pageparser.ParseMain(strings.NewReader(test.input), pageparser.Config{})
-			assert.NoError(err)
+			c.Assert(err, qt.IsNil)
 			handler := newShortcodeHandler(nil, s, placeholderFunc)
 			iter := p.Iterator()
 
 			short, err := handler.extractShortcode(0, 0, iter)
 
-			test.check(assert, short, err)
+			test.check(c, short, err)
 
 		})
 	}
@@ -437,7 +434,6 @@ title: "Shortcodes Galore!"
 }
 
 func TestShortcodesInSite(t *testing.T) {
-	t.Parallel()
 	baseURL := "http://foo/bar"
 
 	tests := []struct {
@@ -577,14 +573,16 @@ title: "Foo"
 	s := buildSingleSite(t, deps.DepsCfg{WithTemplate: addTemplates, Fs: fs, Cfg: cfg}, BuildCfg{})
 
 	for i, test := range tests {
+		test := test
 		t.Run(fmt.Sprintf("test=%d;contentPath=%s", i, test.contentPath), func(t *testing.T) {
+			t.Parallel()
 			if strings.HasSuffix(test.contentPath, ".ad") && !helpers.HasAsciidoc() {
 				t.Skip("Skip Asciidoc test case as no Asciidoc present.")
 			} else if strings.HasSuffix(test.contentPath, ".rst") && !helpers.HasRst() {
 				t.Skip("Skip Rst test case as no rst2html present.")
 			}
 
-			th := testHelper{s.Cfg, s.Fs, t}
+			th := newTestHelper(s.Cfg, s.Fs, t)
 
 			expected := cast.ToStringSlice(test.expected)
 			th.assertFileContent(filepath.FromSlash(test.outFile), expected...)
@@ -632,9 +630,8 @@ outputs: ["CSV"]
 CSV: {{< myShort >}}
 `
 
-	mf := afero.NewMemMapFs()
-
-	th, h := newTestSitesFromConfig(t, mf, siteConfig,
+	b := newTestSitesBuilder(t).WithConfigFile("toml", siteConfig)
+	b.WithTemplates(
 		"layouts/_default/single.html", `Single HTML: {{ .Title }}|{{ .Content }}`,
 		"layouts/_default/single.json", `Single JSON: {{ .Title }}|{{ .Content }}`,
 		"layouts/_default/single.csv", `Single CSV: {{ .Title }}|{{ .Content }}`,
@@ -651,22 +648,21 @@ CSV: {{< myShort >}}
 		"layouts/shortcodes/myInner.html", `myInner:--{{- .Inner -}}--`,
 	)
 
-	fs := th.Fs
+	b.WithContent("_index.md", fmt.Sprintf(pageTemplate, "Home"),
+		"sect/mypage.md", fmt.Sprintf(pageTemplate, "Single"),
+		"sect/mycsvpage.md", fmt.Sprintf(pageTemplateCSVOnly, "Single CSV"),
+	)
 
-	writeSource(t, fs, "content/_index.md", fmt.Sprintf(pageTemplate, "Home"))
-	writeSource(t, fs, "content/sect/mypage.md", fmt.Sprintf(pageTemplate, "Single"))
-	writeSource(t, fs, "content/sect/mycsvpage.md", fmt.Sprintf(pageTemplateCSVOnly, "Single CSV"))
-
-	err := h.Build(BuildCfg{})
-	require.NoError(t, err)
-	require.Len(t, h.Sites, 1)
+	b.Build(BuildCfg{})
+	h := b.H
+	b.Assert(len(h.Sites), qt.Equals, 1)
 
 	s := h.Sites[0]
 	home := s.getPage(page.KindHome)
-	require.NotNil(t, home)
-	require.Len(t, home.OutputFormats(), 3)
+	b.Assert(home, qt.Not(qt.IsNil))
+	b.Assert(len(home.OutputFormats()), qt.Equals, 3)
 
-	th.assertFileContent("public/index.html",
+	b.AssertFileContent("public/index.html",
 		"Home HTML",
 		"ShortHTML",
 		"ShortNoExt",
@@ -674,7 +670,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortHTML--",
 	)
 
-	th.assertFileContent("public/amp/index.html",
+	b.AssertFileContent("public/amp/index.html",
 		"Home AMP",
 		"ShortAMP",
 		"ShortNoExt",
@@ -682,7 +678,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortAMP--",
 	)
 
-	th.assertFileContent("public/index.ics",
+	b.AssertFileContent("public/index.ics",
 		"Home Calendar",
 		"ShortCalendar",
 		"ShortNoExt",
@@ -690,7 +686,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortCalendar--",
 	)
 
-	th.assertFileContent("public/sect/mypage/index.html",
+	b.AssertFileContent("public/sect/mypage/index.html",
 		"Single HTML",
 		"ShortHTML",
 		"ShortNoExt",
@@ -698,7 +694,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortHTML--",
 	)
 
-	th.assertFileContent("public/sect/mypage/index.json",
+	b.AssertFileContent("public/sect/mypage/index.json",
 		"Single JSON",
 		"ShortJSON",
 		"ShortNoExt",
@@ -706,7 +702,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortJSON--",
 	)
 
-	th.assertFileContent("public/amp/sect/mypage/index.html",
+	b.AssertFileContent("public/amp/sect/mypage/index.html",
 		// No special AMP template
 		"Single HTML",
 		"ShortAMP",
@@ -715,7 +711,7 @@ CSV: {{< myShort >}}
 		"myInner:--ShortAMP--",
 	)
 
-	th.assertFileContent("public/sect/mycsvpage/index.csv",
+	b.AssertFileContent("public/sect/mycsvpage/index.csv",
 		"Single CSV",
 		"ShortCSV",
 	)
@@ -831,7 +827,6 @@ func TestReplaceShortcodeTokens(t *testing.T) {
 
 func TestShortcodeGetContent(t *testing.T) {
 	t.Parallel()
-	assert := require.New(t)
 
 	contentShortcode := `
 {{- $t := .Get 0 -}}
@@ -864,10 +859,6 @@ weight: %d
 ---
 C-%s`
 
-	v := viper.New()
-
-	v.Set("timeout", 500)
-
 	templates = append(templates, []string{"shortcodes/c.html", contentShortcode}...)
 	templates = append(templates, []string{"_default/single.html", "Single Content: {{ .Content }}"}...)
 	templates = append(templates, []string{"_default/list.html", "List Content: {{ .Content }}"}...)
@@ -884,21 +875,21 @@ C-%s`
 
 	builder := newTestSitesBuilder(t).WithDefaultMultiSiteConfig()
 
-	builder.WithViper(v).WithContent(content...).WithTemplates(templates...).CreateSites().Build(BuildCfg{})
+	builder.WithContent(content...).WithTemplates(templates...).CreateSites().Build(BuildCfg{})
 	s := builder.H.Sites[0]
-	assert.Equal(3, len(s.RegularPages()))
+	builder.Assert(len(s.RegularPages()), qt.Equals, 3)
 
-	builder.AssertFileContent("public/section1/index.html",
+	builder.AssertFileContent("public/en/section1/index.html",
 		"List Content: <p>Logo:P1:|P2:logo.png/PNG logo|:P1: P1:|P2:docs1p1/<p>C-s1p1</p>\n|",
 		"BP1:P1:|P2:docbp1/<p>C-bp1</p>",
 	)
 
-	builder.AssertFileContent("public/b1/index.html",
+	builder.AssertFileContent("public/en/b1/index.html",
 		"Single Content: <p>Logo:P1:|P2:logo.png/PNG logo|:P1: P1:|P2:docs1p1/<p>C-s1p1</p>\n|",
 		"P2:docbp1/<p>C-bp1</p>",
 	)
 
-	builder.AssertFileContent("public/section2/s2p1/index.html",
+	builder.AssertFileContent("public/en/section2/s2p1/index.html",
 		"Single Content: <p>Logo:P1:|P2:logo.png/PNG logo|:P1: P1:|P2:docs1p1/<p>C-s1p1</p>\n|",
 		"P2:docbp1/<p>C-bp1</p>",
 	)
@@ -966,7 +957,7 @@ SHORTCODE: {{< c >}}
 
 func TestShortcodePreserveOrder(t *testing.T) {
 	t.Parallel()
-	assert := require.New(t)
+	c := qt.New(t)
 
 	contentTemplate := `---
 title: doc%d
@@ -1012,7 +1003,7 @@ weight: %d
 	builder.WithContent(content...).WithTemplatesAdded(shortcodes...).CreateSites().Build(BuildCfg{})
 
 	s := builder.H.Sites[0]
-	assert.Equal(3, len(s.RegularPages()))
+	c.Assert(len(s.RegularPages()), qt.Equals, 3)
 
 	builder.AssertFileContent("public/en/p1/index.html", `v1: 0 sgo: |v2: 1 sgo: 0|v3: 2 sgo: 1|v4: 3 sgo: 2|v5: 4 sgo: 3`)
 	builder.AssertFileContent("public/en/p1/index.html", `outer ordinal: 5 inner: 
@@ -1024,7 +1015,7 @@ ordinal: 4 scratch ordinal: 5 scratch get ordinal: 4`)
 
 func TestShortcodeVariables(t *testing.T) {
 	t.Parallel()
-	assert := require.New(t)
+	c := qt.New(t)
 
 	builder := newTestSitesBuilder(t).WithSimpleConfigFile()
 
@@ -1049,7 +1040,7 @@ String: {{ . | safeHTML }}
 `).CreateSites().Build(BuildCfg{})
 
 	s := builder.H.Sites[0]
-	assert.Equal(1, len(s.RegularPages()))
+	c.Assert(len(s.RegularPages()), qt.Equals, 1)
 
 	builder.AssertFileContent("public/page/index.html",
 		filepath.FromSlash("File: content/page.md"),
@@ -1062,8 +1053,10 @@ String: {{ . | safeHTML }}
 
 func TestInlineShortcodes(t *testing.T) {
 	for _, enableInlineShortcodes := range []bool{true, false} {
+		enableInlineShortcodes := enableInlineShortcodes
 		t.Run(fmt.Sprintf("enableInlineShortcodes=%t", enableInlineShortcodes),
 			func(t *testing.T) {
+				t.Parallel()
 				conf := fmt.Sprintf(`
 baseURL = "https://example.com"
 enableInlineShortcodes = %t
@@ -1140,7 +1133,7 @@ CONTENT:{{ .Content }}
 // https://github.com/gohugoio/hugo/issues/5863
 func TestShortcodeNamespaced(t *testing.T) {
 	t.Parallel()
-	assert := require.New(t)
+	c := qt.New(t)
 
 	builder := newTestSitesBuilder(t).WithSimpleConfigFile()
 
@@ -1158,7 +1151,7 @@ title: "Hugo Rocks!"
 		"layouts/shortcodes/test/hello.html", `test/hello`).CreateSites().Build(BuildCfg{})
 
 	s := builder.H.Sites[0]
-	assert.Equal(1, len(s.RegularPages()))
+	c.Assert(len(s.RegularPages()), qt.Equals, 1)
 
 	builder.AssertFileContent("public/page/index.html",
 		"hello: hello",

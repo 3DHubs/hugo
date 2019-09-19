@@ -512,7 +512,7 @@ func (t *htmlTemplates) addTemplateIn(tt *template.Template, name, tpl string) (
 		return nil, err
 	}
 
-	for k, _ := range c.notFound {
+	for k := range c.notFound {
 		t.transformNotFound[k] = true
 	}
 
@@ -580,7 +580,7 @@ func (t *textTemplates) addTemplateIn(tt *texttemplate.Template, name, tpl strin
 		return nil, err
 	}
 
-	for k, _ := range c.notFound {
+	for k := range c.notFound {
 		t.transformNotFound[k] = true
 	}
 
@@ -637,7 +637,7 @@ func (t *templateHandler) postTransform() error {
 			return templT.Tree
 		}, t.text.transformNotFound},
 	} {
-		for name, _ := range s.transformNotFound {
+		for name := range s.transformNotFound {
 			templ := s.lookup(name)
 			if templ != nil {
 				_, err := applyTemplateTransformers(templateUndefined, templ, s.lookup)
@@ -711,7 +711,7 @@ func (t *templateHandler) RebuildClone() {
 
 func (t *templateHandler) loadTemplates(prefix string) error {
 
-	walker := func(path string, fi os.FileInfo, err error) error {
+	walker := func(path string, fi hugofs.FileMetaInfo, err error) error {
 		if err != nil || fi.IsDir() {
 			return err
 		}
@@ -928,8 +928,8 @@ func (t *templateHandler) addTemplateFile(name, baseTemplatePath, path string) e
 
 		realFilename := filename
 		if fi, err := fs.Stat(filename); err == nil {
-			if fir, ok := fi.(hugofs.RealFilenameInfo); ok {
-				realFilename = fir.RealFilename()
+			if fim, ok := fi.(hugofs.FileMetaInfo); ok {
+				realFilename = fim.Meta().Filename()
 			}
 		}
 

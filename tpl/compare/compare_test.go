@@ -14,17 +14,17 @@
 package compare
 
 import (
-	"fmt"
 	"path"
 	"reflect"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/gohugoio/hugo/htesting/hqt"
+
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/spf13/cast"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type T struct {
@@ -80,10 +80,11 @@ func tstIsLt(tp tstCompareType) bool { return tp == tstLt || tp == tstLe }
 
 func TestDefaultFunc(t *testing.T) {
 	t.Parallel()
+	c := qt.New(t)
 
 	then := time.Now()
 	now := time.Now()
-	ns := New()
+	ns := New(false)
 
 	for i, test := range []struct {
 		dflt   interface{}
@@ -127,19 +128,26 @@ func TestDefaultFunc(t *testing.T) {
 		{then, now, now},
 		{then, time.Time{}, then},
 	} {
-		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		eq := qt.CmpEquals(hqt.DeepAllowUnexported(test.dflt))
+
+		errMsg := qt.Commentf("[%d] %v", i, test)
 
 		result, err := ns.Default(test.dflt, test.given)
 
-		require.NoError(t, err, errMsg)
-		assert.Equal(t, result, test.expect, errMsg)
+		c.Assert(err, qt.IsNil, errMsg)
+		c.Assert(result, eq, test.expect, errMsg)
 	}
 }
 
 func TestCompare(t *testing.T) {
 	t.Parallel()
 
-	n := New()
+	n := New(false)
+
+	twoEq := func(a, b interface{}) bool {
+		return n.Eq(a, b)
+	}
 
 	for _, test := range []struct {
 		tstCompareType
@@ -149,7 +157,7 @@ func TestCompare(t *testing.T) {
 		{tstLt, n.Lt},
 		{tstGe, n.Ge},
 		{tstLe, n.Le},
-		{tstEq, n.Eq},
+		{tstEq, twoEq},
 		{tstNe, n.Ne},
 	} {
 		doTestCompare(t, test.tstCompareType, test.funcUnderTest)
@@ -233,6 +241,36 @@ func doTestCompare(t *testing.T, tp tstCompareType, funcUnderTest func(a, b inte
 	}
 }
 
+func TestEqualExtend(t *testing.T) {
+	t.Parallel()
+	c := qt.New(t)
+
+	ns := New(false)
+
+	for _, test := range []struct {
+		first  interface{}
+		others []interface{}
+		expect bool
+	}{
+		{1, []interface{}{1, 2}, true},
+		{1, []interface{}{2, 1}, true},
+		{1, []interface{}{2, 3}, false},
+	} {
+
+		result := ns.Eq(test.first, test.others...)
+
+		c.Assert(result, qt.Equals, test.expect)
+	}
+}
+
+func TestCase(t *testing.T) {
+	c := qt.New(t)
+	n := New(true)
+
+	c.Assert(n.Lt("az", "Za"), qt.Equals, true)
+	c.Assert(n.Gt("ab", "Ab"), qt.Equals, true)
+}
+
 func TestTimeUnix(t *testing.T) {
 	t.Parallel()
 	var sec int64 = 1234567890
@@ -257,10 +295,10 @@ func TestTimeUnix(t *testing.T) {
 }
 
 func TestConditional(t *testing.T) {
-	assert := require.New(t)
-	n := New()
+	c := qt.New(t)
+	n := New(false)
 	a, b := "a", "b"
 
-	assert.Equal(a, n.Conditional(true, a, b))
-	assert.Equal(b, n.Conditional(false, a, b))
+	c.Assert(n.Conditional(true, a, b), qt.Equals, a)
+	c.Assert(n.Conditional(false, a, b), qt.Equals, b)
 }

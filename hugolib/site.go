@@ -14,7 +14,6 @@
 package hugolib
 
 import (
-	"context"
 	"fmt"
 	"html/template"
 	"io"
@@ -28,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gohugoio/hugo/hugofs/files"
 
 	"github.com/gohugoio/hugo/common/maps"
 
@@ -45,7 +46,6 @@ import (
 
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/lazy"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/gohugoio/hugo/media"
 
@@ -58,7 +58,6 @@ import (
 	"github.com/gohugoio/hugo/related"
 	"github.com/gohugoio/hugo/resources"
 	"github.com/gohugoio/hugo/resources/page/pagemeta"
-	"github.com/gohugoio/hugo/resources/resource"
 	"github.com/gohugoio/hugo/source"
 	"github.com/gohugoio/hugo/tpl"
 
@@ -94,14 +93,10 @@ type Site struct {
 
 	Taxonomies TaxonomyList
 
-	taxonomyNodes *taxonomyNodeInfos
-
 	Sections Taxonomy
 	Info     SiteInfo
 
 	layoutHandler *output.LayoutHandler
-
-	buildStats *buildStats
 
 	language *langs.Language
 
@@ -216,12 +211,13 @@ func (s *Site) prepareInits() {
 
 	s.init.prevNextInSection = init.Branch(func() (interface{}, error) {
 		var rootSection []int
+		// TODO(bep) cm attach this to the bucket.
 		for i, p1 := range s.workAllPages {
 			if p1.IsPage() && p1.Section() == "" {
 				rootSection = append(rootSection, i)
 			}
 			if p1.IsSection() {
-				sectionPages := p1.Pages()
+				sectionPages := p1.RegularPages()
 				for i, p2 := range sectionPages {
 					p2s := p2.(*pageState)
 					if p2s.posNextPrevSection == nil {
@@ -261,28 +257,6 @@ func (s *Site) prepareInits() {
 		return nil, nil
 	})
 
-}
-
-// Build stats for a given site.
-type buildStats struct {
-	draftCount   int
-	futureCount  int
-	expiredCount int
-}
-
-// TODO(bep) consolidate all site stats into this
-func (b *buildStats) update(p page.Page) {
-	if p.Draft() {
-		b.draftCount++
-	}
-
-	if resource.IsFuture(p) {
-		b.futureCount++
-	}
-
-	if resource.IsExpired(p) {
-		b.expiredCount++
-	}
 }
 
 type siteRenderingContext struct {
@@ -355,9 +329,8 @@ func (s *Site) reset() *Site {
 		publisher:              s.publisher,
 		siteConfigConfig:       s.siteConfigConfig,
 		enableInlineShortcodes: s.enableInlineShortcodes,
-		buildStats:             &buildStats{},
 		init:                   s.init,
-		PageCollections:        newPageCollections(),
+		PageCollections:        s.PageCollections,
 		siteCfg:                s.siteCfg,
 	}
 
@@ -453,7 +426,6 @@ func newSite(cfg deps.DepsCfg) (*Site, error) {
 		outputFormatsConfig:    siteOutputFormatsConfig,
 		mediaTypesConfig:       siteMediaTypesConfig,
 		frontmatterHandler:     frontMatterHandler,
-		buildStats:             &buildStats{},
 		enableInlineShortcodes: cfg.Language.GetBool("enableInlineShortcodes"),
 		siteCfg:                siteConfig,
 	}
@@ -672,7 +644,6 @@ func (s *SiteInfo) DisqusShortname() string {
 // facebook_admin
 // twitter
 // twitter_domain
-// googleplus
 // pinterest
 // instagram
 // youtube
@@ -921,7 +892,7 @@ func (s *Site) translateFileEvents(events []fsnotify.Event) []fsnotify.Event {
 // reBuild partially rebuilds a site given the filesystem events.
 // It returns whetever the content source was changed.
 // TODO(bep) clean up/rewrite this method.
-func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
+func (s *Site) processPartial(config *BuildCfg, init func(config *BuildCfg) error, events []fsnotify.Event) error {
 
 	events = s.filterFileEvents(events)
 	events = s.translateFileEvents(events)
@@ -946,10 +917,12 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 		logger = helpers.NewDistinctFeedbackLogger()
 	)
 
-	cachePartitions := make([]string, len(events))
+	var cachePartitions []string
 
-	for i, ev := range events {
-		cachePartitions[i] = resources.ResourceKeyPartition(ev.Name)
+	for _, ev := range events {
+		if assetsFilename := s.BaseFs.Assets.MakePathRelative(ev.Name); assetsFilename != "" {
+			cachePartitions = append(cachePartitions, resources.ResourceKeyPartitions(assetsFilename)...)
+		}
 
 		if s.isContentDirEvent(ev) {
 			logger.Println("Source changed", ev)
@@ -975,6 +948,18 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 		}
 	}
 
+	changed := &whatChanged{
+		source: len(sourceChanged) > 0 || len(shortcodesChanged) > 0,
+		other:  len(tmplChanged) > 0 || len(i18nChanged) > 0 || len(dataChanged) > 0,
+		files:  sourceFilesChanged,
+	}
+
+	config.whatChanged = changed
+
+	if err := init(config); err != nil {
+		return err
+	}
+
 	// These in memory resource caches will be rebuilt on demand.
 	for _, s := range s.h.Sites {
 		s.ResourceSpec.ResourceCache.DeletePartitions(cachePartitions...)
@@ -988,7 +973,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 
 		// TOD(bep) globals clean
 		if err := first.Deps.LoadResources(); err != nil {
-			return whatChanged{}, err
+			return err
 		}
 
 		for i := 1; i < len(sites); i++ {
@@ -1004,7 +989,7 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 				return nil
 			})
 			if err != nil {
-				return whatChanged{}, err
+				return err
 			}
 		}
 	}
@@ -1029,7 +1014,8 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 				removed = true
 			}
 		}
-		if removed && IsContentFile(ev.Name) {
+
+		if removed && files.IsContentFile(ev.Name) {
 			h.removePageByFilename(ev.Name)
 		}
 
@@ -1059,80 +1045,28 @@ func (s *Site) processPartial(events []fsnotify.Event) (whatChanged, error) {
 			filenamesChanged = append(filenamesChanged, contentFilesChanged...)
 		}
 
-		filenamesChanged = helpers.UniqueStrings(filenamesChanged)
+		filenamesChanged = helpers.UniqueStringsReuse(filenamesChanged)
 
 		if err := s.readAndProcessContent(filenamesChanged...); err != nil {
-			return whatChanged{}, err
+			return err
 		}
 
 	}
 
-	changed := whatChanged{
-		source: len(sourceChanged) > 0 || len(shortcodesChanged) > 0,
-		other:  len(tmplChanged) > 0 || len(i18nChanged) > 0 || len(dataChanged) > 0,
-		files:  sourceFilesChanged,
-	}
-
-	return changed, nil
+	return nil
 
 }
 
 func (s *Site) process(config BuildCfg) (err error) {
 	if err = s.initialize(); err != nil {
+		err = errors.Wrap(err, "initialize")
 		return
 	}
-	if err := s.readAndProcessContent(); err != nil {
-		return err
+	if err = s.readAndProcessContent(); err != nil {
+		err = errors.Wrap(err, "readAndProcessContent")
+		return
 	}
 	return err
-
-}
-
-func (s *Site) setupSitePages() {
-	var homeDates *resource.Dates
-	if s.home != nil {
-		// If the home page has no dates set, we fall back to the site dates.
-		homeDates = &s.home.m.Dates
-	}
-
-	if !s.lastmod.IsZero() && (homeDates == nil || !resource.IsZeroDates(homeDates)) {
-		return
-	}
-
-	if homeDates != nil && !s.lastmod.IsZero() {
-		homeDates.FDate = s.lastmod
-		homeDates.FLastmod = s.lastmod
-		return
-
-	}
-
-	var siteLastmod time.Time
-	var siteLastDate time.Time
-
-	for _, page := range s.workAllPages {
-		if !page.IsPage() {
-			continue
-		}
-		// Determine Site.Info.LastChange
-		// Note that the logic to determine which date to use for Lastmod
-		// is already applied, so this is *the* date to use.
-		// We cannot just pick the last page in the default sort, because
-		// that may not be ordered by date.
-		// TODO(bep) check if this can be done earlier
-		if page.Lastmod().After(siteLastmod) {
-			siteLastmod = page.Lastmod()
-		}
-		if page.Date().After(siteLastDate) {
-			siteLastDate = page.Date()
-		}
-	}
-
-	s.lastmod = siteLastmod
-
-	if homeDates != nil && resource.IsZeroDates(homeDates) {
-		homeDates.FDate = siteLastDate
-		homeDates.FLastmod = s.lastmod
-	}
 
 }
 
@@ -1305,93 +1239,14 @@ func (s *Site) isContentDirEvent(e fsnotify.Event) bool {
 	return s.BaseFs.IsContent(e.Name)
 }
 
-type contentCaptureResultHandler struct {
-	defaultContentProcessor *siteContentProcessor
-	contentProcessors       map[string]*siteContentProcessor
-}
-
-func (c *contentCaptureResultHandler) getContentProcessor(lang string) *siteContentProcessor {
-	proc, found := c.contentProcessors[lang]
-	if found {
-		return proc
-	}
-	return c.defaultContentProcessor
-}
-
-func (c *contentCaptureResultHandler) handleSingles(fis ...*fileInfo) {
-	for _, fi := range fis {
-		proc := c.getContentProcessor(fi.Lang())
-		proc.processSingle(fi)
-	}
-}
-func (c *contentCaptureResultHandler) handleBundles(d *bundleDirs) {
-	for _, b := range d.bundles {
-		proc := c.getContentProcessor(b.fi.Lang())
-		proc.processBundle(b)
-	}
-}
-
-func (c *contentCaptureResultHandler) handleCopyFile(f pathLangFile) {
-	proc := c.getContentProcessor(f.Lang())
-	proc.processAsset(f)
-}
-
 func (s *Site) readAndProcessContent(filenames ...string) error {
-
-	ctx := context.Background()
-	g, ctx := errgroup.WithContext(ctx)
-
-	defaultContentLanguage := s.SourceSpec.DefaultContentLanguage
-
-	contentProcessors := make(map[string]*siteContentProcessor)
-	var defaultContentProcessor *siteContentProcessor
-	sites := s.h.langSite()
-	for k, v := range sites {
-		if v.language.Disabled {
-			continue
-		}
-		proc := newSiteContentProcessor(ctx, len(filenames) > 0, v)
-		contentProcessors[k] = proc
-		if k == defaultContentLanguage {
-			defaultContentProcessor = proc
-		}
-		g.Go(func() error {
-			return proc.process(ctx)
-		})
-	}
-
-	var (
-		handler   captureResultHandler
-		bundleMap *contentChangeMap
-	)
-
-	mainHandler := &contentCaptureResultHandler{contentProcessors: contentProcessors, defaultContentProcessor: defaultContentProcessor}
-
 	sourceSpec := source.NewSourceSpec(s.PathSpec, s.BaseFs.Content.Fs)
 
-	if s.running() {
-		// Need to track changes.
-		bundleMap = s.h.ContentChanges
-		handler = &captureResultHandlerChain{handlers: []captureBundlesHandler{mainHandler, bundleMap}}
+	proc := newPagesProcessor(s.h, sourceSpec, len(filenames) > 0)
 
-	} else {
-		handler = mainHandler
-	}
+	c := newPagesCollector(sourceSpec, s.Log, s.h.ContentChanges, proc, filenames...)
 
-	c := newCapturer(s.Log, sourceSpec, handler, bundleMap, filenames...)
-
-	err1 := c.capture()
-
-	for _, proc := range contentProcessors {
-		proc.closeInput()
-	}
-
-	err2 := g.Wait()
-
-	if err1 != nil {
-		return err1
-	}
-	return err2
+	return c.Collect()
 }
 
 func (s *Site) getMenusFromConfig() navigation.Menus {
@@ -1560,81 +1415,22 @@ func (s *Site) getTaxonomyKey(key string) string {
 	return strings.ToLower(s.PathSpec.MakePath(key))
 }
 
-func (s *Site) assembleTaxonomies() error {
-	s.Taxonomies = make(TaxonomyList)
-	taxonomies := s.siteCfg.taxonomiesConfig
-	for _, plural := range taxonomies {
-		s.Taxonomies[plural] = make(Taxonomy)
-	}
-
-	s.taxonomyNodes = &taxonomyNodeInfos{
-		m:      make(map[string]*taxonomyNodeInfo),
-		getKey: s.getTaxonomyKey,
-	}
-
-	s.Log.INFO.Printf("found taxonomies: %#v\n", taxonomies)
-
-	for singular, plural := range taxonomies {
-		parent := s.taxonomyNodes.GetOrCreate(plural, "")
-		parent.singular = singular
-
-		addTaxonomy := func(plural, term string, weight int, p page.Page) {
-			key := s.getTaxonomyKey(term)
-
-			n := s.taxonomyNodes.GetOrCreate(plural, term)
-			n.parent = parent
-
-			w := page.NewWeightedPage(weight, p, n.owner)
-
-			s.Taxonomies[plural].add(key, w)
-
-			n.UpdateFromPage(w.Page)
-			parent.UpdateFromPage(w.Page)
-		}
-
-		for _, p := range s.workAllPages {
-			vals := getParam(p, plural, false)
-
-			w := getParamToLower(p, plural+"_weight")
-			weight, err := cast.ToIntE(w)
-			if err != nil {
-				s.Log.ERROR.Printf("Unable to convert taxonomy weight %#v to int for %q", w, p.pathOrTitle())
-				// weight will equal zero, so let the flow continue
-			}
-
-			if vals != nil {
-				if v, ok := vals.([]string); ok {
-					for _, idx := range v {
-						addTaxonomy(plural, idx, weight, p)
-					}
-				} else if v, ok := vals.(string); ok {
-					addTaxonomy(plural, v, weight, p)
-				} else {
-					s.Log.ERROR.Printf("Invalid %s in %q\n", plural, p.pathOrTitle())
-				}
-			}
-		}
-
-		for k := range s.Taxonomies[plural] {
-			s.Taxonomies[plural][k].Sort()
-		}
-	}
-
-	return nil
-}
-
 // Prepare site for a new full build.
-func (s *Site) resetBuildState() {
+func (s *Site) resetBuildState(sourceChanged bool) {
 	s.relatedDocsHandler = s.relatedDocsHandler.Clone()
-	s.PageCollections = newPageCollectionsFromPages(s.rawAllPages)
-	s.buildStats = &buildStats{}
 	s.init.Reset()
 
-	for _, p := range s.rawAllPages {
-		p.pagePages = &pagePages{}
-		p.subSections = page.Pages{}
-		p.parent = nil
-		p.Scratcher = maps.NewScratcher()
+	if sourceChanged {
+		s.PageCollections = newPageCollectionsFromPages(s.rawAllPages)
+		for _, p := range s.rawAllPages {
+			p.pagePages = &pagePages{}
+			p.parent = nil
+			p.Scratcher = maps.NewScratcher()
+		}
+	} else {
+		s.pagesMap.withEveryPage(func(p *pageState) {
+			p.Scratcher = maps.NewScratcher()
+		})
 	}
 }
 
@@ -1832,12 +1628,15 @@ func (s *Site) kindFromFileInfoOrSections(fi *fileInfo, sections []string) strin
 }
 
 func (s *Site) kindFromSections(sections []string) string {
-	if len(sections) == 0 || len(s.siteCfg.taxonomiesConfig) == 0 {
-		return page.KindSection
+	if len(sections) == 0 {
+		return page.KindHome
 	}
 
-	sectionPath := path.Join(sections...)
+	return s.kindFromSectionPath(path.Join(sections...))
 
+}
+
+func (s *Site) kindFromSectionPath(sectionPath string) string {
 	for _, plural := range s.siteCfg.taxonomiesConfig {
 		if plural == sectionPath {
 			return page.KindTaxonomyTerm
@@ -1853,12 +1652,13 @@ func (s *Site) kindFromSections(sections []string) string {
 }
 
 func (s *Site) newTaxonomyPage(title string, sections ...string) *pageState {
-	p, err := newPageFromMeta(&pageMeta{
-		title:    title,
-		s:        s,
-		kind:     page.KindTaxonomy,
-		sections: sections,
-	})
+	p, err := newPageFromMeta(
+		map[string]interface{}{"title": title},
+		&pageMeta{
+			s:        s,
+			kind:     page.KindTaxonomy,
+			sections: sections,
+		})
 
 	if err != nil {
 		panic(err)
@@ -1869,11 +1669,13 @@ func (s *Site) newTaxonomyPage(title string, sections ...string) *pageState {
 }
 
 func (s *Site) newPage(kind string, sections ...string) *pageState {
-	p, err := newPageFromMeta(&pageMeta{
-		s:        s,
-		kind:     kind,
-		sections: sections,
-	})
+	p, err := newPageFromMeta(
+		map[string]interface{}{},
+		&pageMeta{
+			s:        s,
+			kind:     kind,
+			sections: sections,
+		})
 
 	if err != nil {
 		panic(err)

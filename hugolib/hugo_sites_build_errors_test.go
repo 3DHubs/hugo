@@ -3,44 +3,41 @@ package hugolib
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fortytw2/leaktest"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/common/herrors"
-	"github.com/stretchr/testify/require"
 )
 
 type testSiteBuildErrorAsserter struct {
-	name   string
-	assert *require.Assertions
+	name string
+	c    *qt.C
 }
 
 func (t testSiteBuildErrorAsserter) getFileError(err error) *herrors.ErrorWithFileContext {
-	t.assert.NotNil(err, t.name)
+	t.c.Assert(err, qt.Not(qt.IsNil), qt.Commentf(t.name))
 	ferr := herrors.UnwrapErrorWithFileContext(err)
-	t.assert.NotNil(ferr, fmt.Sprintf("[%s] got %T: %+v\n%s", t.name, err, err, stackTrace()))
+	t.c.Assert(ferr, qt.Not(qt.IsNil))
 	return ferr
 }
 
 func (t testSiteBuildErrorAsserter) assertLineNumber(lineNumber int, err error) {
 	fe := t.getFileError(err)
-	t.assert.Equal(lineNumber, fe.Position().LineNumber, fmt.Sprintf("[%s]  got => %s\n%s", t.name, fe, stackTrace()))
+	t.c.Assert(fe.Position().LineNumber, qt.Equals, lineNumber)
 }
 
 func (t testSiteBuildErrorAsserter) assertErrorMessage(e1, e2 string) {
 	// The error message will contain filenames with OS slashes. Normalize before compare.
 	e1, e2 = filepath.ToSlash(e1), filepath.ToSlash(e2)
-	t.assert.Contains(e2, e1, stackTrace())
+	t.c.Assert(e2, qt.Contains, e1)
 
 }
 
 func TestSiteBuildErrors(t *testing.T) {
-	t.Parallel()
 
 	const (
 		yamlcontent = "yamlcontent"
@@ -90,9 +87,9 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertCreateError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(5, fe.Position().LineNumber)
-				a.assert.Equal(1, fe.Position().ColumnNumber)
-				a.assert.Equal("go-html-template", fe.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 5)
+				a.c.Assert(fe.Position().ColumnNumber, qt.Equals, 1)
+				a.c.Assert(fe.ChromaLexer, qt.Equals, "go-html-template")
 				a.assertErrorMessage("\"layouts/_default/single.html:5:1\": parse failed: template: _default/single.html:5: unexpected \"}\" in operand", fe.Error())
 
 			},
@@ -105,9 +102,9 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(5, fe.Position().LineNumber)
-				a.assert.Equal(14, fe.Position().ColumnNumber)
-				a.assert.Equal("go-html-template", fe.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 5)
+				a.c.Assert(fe.Position().ColumnNumber, qt.Equals, 14)
+				a.c.Assert(fe.ChromaLexer, qt.Equals, "go-html-template")
 				a.assertErrorMessage("\"layouts/_default/single.html:5:14\": execute of template failed", fe.Error())
 
 			},
@@ -120,9 +117,9 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(5, fe.Position().LineNumber)
-				a.assert.Equal(14, fe.Position().ColumnNumber)
-				a.assert.Equal("go-html-template", fe.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 5)
+				a.c.Assert(fe.Position().ColumnNumber, qt.Equals, 14)
+				a.c.Assert(fe.ChromaLexer, qt.Equals, "go-html-template")
 				a.assertErrorMessage("\"layouts/_default/single.html:5:14\": execute of template failed", fe.Error())
 
 			},
@@ -145,8 +142,8 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(7, fe.Position().LineNumber)
-				a.assert.Equal("md", fe.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 7)
+				a.c.Assert(fe.ChromaLexer, qt.Equals, "md")
 				// Make sure that it contains both the content file and template
 				a.assertErrorMessage(`content/myyaml.md:7:10": failed to render shortcode "sc"`, fe.Error())
 				a.assertErrorMessage(`shortcodes/sc.html:4:22: executing "shortcodes/sc.html" at <.Page.Titles>: can't evaluate`, fe.Error())
@@ -160,9 +157,9 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(7, fe.Position().LineNumber)
-				a.assert.Equal(10, fe.Position().ColumnNumber)
-				a.assert.Equal("md", fe.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 7)
+				a.c.Assert(fe.Position().ColumnNumber, qt.Equals, 10)
+				a.c.Assert(fe.ChromaLexer, qt.Equals, "md")
 				a.assertErrorMessage(`"content/myyaml.md:7:10": failed to extract shortcode: template for shortcode "nono" not found`, fe.Error())
 			},
 		},
@@ -184,8 +181,8 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
-				a.assert.Equal(6, fe.Position().LineNumber)
-				a.assert.Equal("toml", fe.ErrorContext.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 6)
+				a.c.Assert(fe.ErrorContext.ChromaLexer, qt.Equals, "toml")
 
 			},
 		},
@@ -198,8 +195,8 @@ func TestSiteBuildErrors(t *testing.T) {
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
 				fe := a.getFileError(err)
 
-				a.assert.Equal(3, fe.Position().LineNumber)
-				a.assert.Equal("json", fe.ErrorContext.ChromaLexer)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 3)
+				a.c.Assert(fe.ErrorContext.ChromaLexer, qt.Equals, "json")
 
 			},
 		},
@@ -212,25 +209,22 @@ func TestSiteBuildErrors(t *testing.T) {
 			},
 
 			assertBuildError: func(a testSiteBuildErrorAsserter, err error) {
-				a.assert.Error(err)
-				// This is fixed in latest Go source
-				if regexp.MustCompile("devel|12").MatchString(runtime.Version()) {
-					fe := a.getFileError(err)
-					a.assert.Equal(5, fe.Position().LineNumber)
-					a.assert.Equal(21, fe.Position().ColumnNumber)
-				} else {
-					a.assert.Contains(err.Error(), `execute of template failed: panic in Execute`)
-				}
+				a.c.Assert(err, qt.Not(qt.IsNil))
+				fe := a.getFileError(err)
+				a.c.Assert(fe.Position().LineNumber, qt.Equals, 5)
+				a.c.Assert(fe.Position().ColumnNumber, qt.Equals, 21)
 			},
 		},
 	}
 
 	for _, test := range tests {
+		test := test
 		t.Run(test.name, func(t *testing.T) {
-			assert := require.New(t)
+			t.Parallel()
+			c := qt.New(t)
 			errorAsserter := testSiteBuildErrorAsserter{
-				assert: assert,
-				name:   test.name,
+				c:    c,
+				name: test.name,
 			}
 
 			b := newTestSitesBuilder(t).WithSimpleConfigFile()
@@ -305,7 +299,7 @@ Some content.
 			if test.assertCreateError != nil {
 				test.assertCreateError(errorAsserter, createErr)
 			} else {
-				assert.NoError(createErr)
+				c.Assert(createErr, qt.IsNil)
 			}
 
 			if createErr == nil {
@@ -313,7 +307,7 @@ Some content.
 				if test.assertBuildError != nil {
 					test.assertBuildError(errorAsserter, buildErr)
 				} else {
-					assert.NoError(buildErr)
+					c.Assert(buildErr, qt.IsNil)
 				}
 			}
 		})

@@ -23,7 +23,7 @@ toc: true
 
 ## Front Matter Formats
 
-Hugo supports three formats for front matter, each with their own identifying tokens.
+Hugo supports four formats for front matter, each with their own identifying tokens.
 
 TOML
 : identified by opening and closing `+++`.
@@ -33,6 +33,10 @@ YAML
 
 JSON
 : a single JSON object surrounded by '`{`' and '`}`', followed by a new line.
+
+ORG
+: a group of Org mode keywords in the format '`#+KEY: VALUE`'. Any line that does not start with `#+` ends the front matter section.
+  Keyword values can be either strings (`#+KEY: VALUE`) or a whitespace separated list of strings (`#+KEY[]: VALUE_1 VALUE_2`).
 
 ### Example
 
@@ -61,7 +65,7 @@ audio
 : an array of paths to audio files related to the page; used by the `opengraph` [internal template](/templates/internal) to populate `og:audio`.
 
 date
-: the datetime at which the content was created; note this value is auto-populated according to Hugo's built-in [archetype][].
+: the datetime assigned to this page. This is usually fetched from the `date` field in front matter, but this behaviour is configurable.
 
 description
 : the description for the content.

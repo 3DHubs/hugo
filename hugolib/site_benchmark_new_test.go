@@ -14,34 +14,58 @@
 package hugolib
 
 import (
+	"fmt"
+	"io/ioutil"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	qt "github.com/frankban/quicktest"
 )
 
-// TODO(bep) eventually remove the old (too complicated setup).
-func BenchmarkSiteNew(b *testing.B) {
-	// TODO(bep) create some common and stable data set
+type siteBenchmarkTestcase struct {
+	name   string
+	create func(t testing.TB) *sitesBuilder
+	check  func(s *sitesBuilder)
+}
 
-	const pageContent = `---
+func getBenchmarkSiteNewTestCases() []siteBenchmarkTestcase {
+
+	const markdownSnippets = `
+
+## Links
+
+
+This is [an example](http://example.com/ "Title") inline link.
+
+[This link](http://example.net/) has no title attribute.
+
+This is [Relative](/all-is-relative).
+
+See my [About](/about/) page for details. 
+`
+
+	pageContent := func(size int) string {
+		return `---
 title: "My Page"
 ---
 
 My page content.
 
-`
+` + strings.Repeat(markdownSnippets, size)
+	}
 
 	config := `
 baseURL = "https://example.com"
 
 `
 
-	benchmarks := []struct {
-		name   string
-		create func(i int) *sitesBuilder
-		check  func(s *sitesBuilder)
-	}{
-		{"Bundle with image", func(i int) *sitesBuilder {
+	benchmarks := []siteBenchmarkTestcase{
+		{"Bundle with image", func(b testing.TB) *sitesBuilder {
 			sb := newTestSitesBuilder(b).WithConfigFile("toml", config)
-			sb.WithContent("content/blog/mybundle/index.md", pageContent)
+			sb.WithContent("content/blog/mybundle/index.md", pageContent(1))
 			sb.WithSunset("content/blog/mybundle/sunset1.jpg")
 
 			return sb
@@ -52,9 +76,9 @@ baseURL = "https://example.com"
 
 			},
 		},
-		{"Bundle with JSON file", func(i int) *sitesBuilder {
+		{"Bundle with JSON file", func(b testing.TB) *sitesBuilder {
 			sb := newTestSitesBuilder(b).WithConfigFile("toml", config)
-			sb.WithContent("content/blog/mybundle/index.md", pageContent)
+			sb.WithContent("content/blog/mybundle/index.md", pageContent(1))
 			sb.WithContent("content/blog/mybundle/mydata.json", `{ "hello": "world" }`)
 
 			return sb
@@ -65,31 +89,168 @@ baseURL = "https://example.com"
 
 			},
 		},
-		{"Multiple languages", func(i int) *sitesBuilder {
+		{"Tags and categories", func(b testing.TB) *sitesBuilder {
+			sb := newTestSitesBuilder(b).WithConfigFile("toml", `
+title = "Tags and Cats"
+baseURL = "https://example.com"
+
+`)
+
+			const pageTemplate = `
+---
+title: "Some tags and cats"
+categories: ["caGR", "cbGR"]
+tags: ["taGR", "tbGR"]
+---
+
+Some content.
+			
+`
+			for i := 1; i <= 100; i++ {
+				content := strings.Replace(pageTemplate, "GR", strconv.Itoa(i/3), -1)
+				sb.WithContent(fmt.Sprintf("content/page%d.md", i), content)
+			}
+
+			return sb
+		},
+			func(s *sitesBuilder) {
+				s.AssertFileContent("public/page3/index.html", "/page3/|Permalink: https://example.com/page3/")
+				s.AssertFileContent("public/tags/ta3/index.html", "|ta3|")
+			},
+		},
+		{"Markdown", func(b testing.TB) *sitesBuilder {
+			sb := newTestSitesBuilder(b).WithConfigFile("toml", `
+title = "What is Markdown"
+baseURL = "https://example.com"
+
+`)
+			data, err := ioutil.ReadFile(filepath.FromSlash("testdata/what-is-markdown.md"))
+			sb.Assert(err, qt.IsNil)
+			datastr := string(data)
+			getContent := func(i int) string {
+				return fmt.Sprintf(`---
+title: "Page %d"
+---
+
+`, i) + datastr
+
+			}
+			for i := 1; i <= 100; i++ {
+				sb.WithContent(fmt.Sprintf("content/page%d.md", i), getContent(i))
+			}
+
+			return sb
+		},
+			func(s *sitesBuilder) {
+				s.Assert(s.CheckExists("public/page8/index.html"), qt.Equals, true)
+			},
+		},
+		{"Canonify URLs", func(b testing.TB) *sitesBuilder {
+			sb := newTestSitesBuilder(b).WithConfigFile("toml", `
+title = "Canon"
+baseURL = "https://example.com"
+canonifyURLs = true
+
+`)
+			for i := 1; i <= 100; i++ {
+				sb.WithContent(fmt.Sprintf("content/page%d.md", i), pageContent(i))
+			}
+
+			return sb
+		},
+			func(s *sitesBuilder) {
+				s.AssertFileContent("public/page8/index.html", "https://example.com/about/")
+			},
+		},
+		{"Deep content tree", func(b testing.TB) *sitesBuilder {
+
 			sb := newTestSitesBuilder(b).WithConfigFile("toml", `
 baseURL = "https://example.com"
 
 [languages]
 [languages.en]
 weight=1
+contentDir="content/en"
 [languages.fr]
 weight=2
+contentDir="content/fr"
+[languages.no]
+weight=3
+contentDir="content/no"
+[languages.sv]
+weight=4
+contentDir="content/sv"
 			
 `)
+
+			createContent := func(dir, name string) {
+				sb.WithContent(filepath.Join("content", dir, name), pageContent(1))
+			}
+
+			createBundledFiles := func(dir string) {
+				sb.WithContent(filepath.Join("content", dir, "data.json"), `{ "hello": "world" }`)
+				for i := 1; i <= 3; i++ {
+					sb.WithContent(filepath.Join("content", dir, fmt.Sprintf("page%d.md", i)), pageContent(1))
+				}
+			}
+
+			for _, lang := range []string{"en", "fr", "no", "sv"} {
+				for level := 1; level <= 5; level++ {
+					sectionDir := path.Join(lang, strings.Repeat("section/", level))
+					createContent(sectionDir, "_index.md")
+					createBundledFiles(sectionDir)
+					for i := 1; i <= 3; i++ {
+						leafBundleDir := path.Join(sectionDir, fmt.Sprintf("bundle%d", i))
+						createContent(leafBundleDir, "index.md")
+						createBundledFiles(path.Join(leafBundleDir, "assets1"))
+						createBundledFiles(path.Join(leafBundleDir, "assets1", "assets2"))
+					}
+				}
+			}
 
 			return sb
 		},
 			func(s *sitesBuilder) {
+				s.CheckExists("public/blog/mybundle/index.html")
+				s.Assert(len(s.H.Sites), qt.Equals, 4)
+				s.Assert(len(s.H.Sites[0].RegularPages()), qt.Equals, len(s.H.Sites[1].RegularPages()))
+				s.Assert(len(s.H.Sites[0].RegularPages()), qt.Equals, 30)
 
 			},
 		},
 	}
 
+	return benchmarks
+
+}
+
+// Run the benchmarks below as tests. Mostly useful when adding new benchmark
+// variants.
+func TestBenchmarkSiteNew(b *testing.T) {
+	benchmarks := getBenchmarkSiteNewTestCases()
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.T) {
+			s := bm.create(b)
+
+			err := s.BuildE(BuildCfg{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			bm.check(s)
+
+		})
+	}
+}
+
+// TODO(bep) eventually remove the old (too complicated setup).
+func BenchmarkSiteNew(b *testing.B) {
+	benchmarks := getBenchmarkSiteNewTestCases()
+
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			sites := make([]*sitesBuilder, b.N)
 			for i := 0; i < b.N; i++ {
-				sites[i] = bm.create(i)
+				sites[i] = bm.create(b)
 			}
 
 			b.ResetTimer()

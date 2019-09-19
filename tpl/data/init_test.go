@@ -16,17 +16,21 @@ package data
 import (
 	"testing"
 
+	qt "github.com/frankban/quicktest"
+	"github.com/gohugoio/hugo/htesting/hqt"
+	"github.com/gohugoio/hugo/langs"
 	"github.com/gohugoio/hugo/tpl/internal"
 	"github.com/spf13/viper"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInit(t *testing.T) {
+	c := qt.New(t)
 	var found bool
 	var ns *internal.TemplateFuncsNamespace
 
 	v := viper.New()
 	v.Set("contentDir", "content")
+	langs.LoadLanguageSettings(v, nil)
 
 	for _, nsf := range internal.TemplateFuncsNamespaceRegistry {
 		ns = nsf(newDeps(v))
@@ -36,6 +40,6 @@ func TestInit(t *testing.T) {
 		}
 	}
 
-	require.True(t, found)
-	require.IsType(t, &Namespace{}, ns.Context())
+	c.Assert(found, qt.Equals, true)
+	c.Assert(ns.Context(), hqt.IsSameType, &Namespace{})
 }

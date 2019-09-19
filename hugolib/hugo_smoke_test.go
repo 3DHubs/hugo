@@ -18,13 +18,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	qt "github.com/frankban/quicktest"
 )
 
 func TestSmoke(t *testing.T) {
 	t.Parallel()
 
-	assert := require.New(t)
+	c := qt.New(t)
 
 	const configFile = `
 baseURL = "https://example.com"
@@ -143,8 +143,8 @@ Some **Markdown** in JSON shortcode.
 	const (
 		commonPageTemplate            = `|{{ .Kind }}|{{ .Title }}|{{ .Path }}|{{ .Summary }}|{{ .Content }}|RelPermalink: {{ .RelPermalink }}|WordCount: {{ .WordCount }}|Pages: {{ .Pages }}|Data Pages: Pages({{ len .Data.Pages }})|Resources: {{ len .Resources }}|Summary: {{ .Summary }}`
 		commonPaginatorTemplate       = `|Paginator: {{ with .Paginator }}{{ .PageNumber }}{{ else }}NIL{{ end }}`
-		commonListTemplateNoPaginator = `|{{ range $i, $e := (.Pages | first 1) }}|Render {{ $i }}: {{ .Kind }}|{{ .Render "li" }}|{{ end }}|Site params: {{ $.Site.Params.hugo }}|RelPermalink: {{ .RelPermalink }}`
-		commonListTemplate            = commonPaginatorTemplate + `|{{ range $i, $e := (.Pages | first 1) }}|Render {{ $i }}: {{ .Kind }}|{{ .Render "li" }}|{{ end }}|Site params: {{ $.Site.Params.hugo }}|RelPermalink: {{ .RelPermalink }}`
+		commonListTemplateNoPaginator = `|{{ $pages := .Pages }}{{ if .IsHome }}{{ $pages = .Site.RegularPages }}{{ end }}{{ range $i, $e := ($pages | first 1) }}|Render {{ $i }}: {{ .Kind }}|{{ .Render "li" }}|{{ end }}|Site params: {{ $.Site.Params.hugo }}|RelPermalink: {{ .RelPermalink }}`
+		commonListTemplate            = commonPaginatorTemplate + `|{{ $pages := .Pages }}{{ if .IsHome }}{{ $pages = .Site.RegularPages }}{{ end }}{{ range $i, $e := ($pages | first 1) }}|Render {{ $i }}: {{ .Kind }}|{{ .Render "li" }}|{{ end }}|Site params: {{ $.Site.Params.hugo }}|RelPermalink: {{ .RelPermalink }}`
 		commonShortcodeTemplate       = `|{{ .Name }}|{{ .Ordinal }}|{{ .Page.Summary }}|{{ .Page.Content }}|WordCount: {{ .Page.WordCount }}`
 		prevNextTemplate              = `|Prev: {{ with .Prev }}{{ .RelPermalink }}{{ end }}|Next: {{ with .Next }}{{ .RelPermalink }}{{ end }}`
 		prevNextInSectionTemplate     = `|PrevInSection: {{ with .PrevInSection }}{{ .RelPermalink }}{{ end }}|NextInSection: {{ with .NextInSection }}{{ .RelPermalink }}{{ end }}`
@@ -193,7 +193,7 @@ Some **Markdown** in JSON shortcode.
 	b.AssertFileContent("public/index.html",
 		"home|In English",
 		"Site params: Rules",
-		"Pages: Pages(18)|Data Pages: Pages(18)",
+		"Pages: Pages(6)|Data Pages: Pages(6)",
 		"Paginator: 1",
 		"First Site: In English",
 		"RelPermalink: /",
@@ -203,8 +203,8 @@ Some **Markdown** in JSON shortcode.
 
 	// Check RSS
 	rssHome := b.FileContent("public/index.xml")
-	assert.Contains(rssHome, `<atom:link href="https://example.com/index.xml" rel="self" type="application/rss+xml" />`)
-	assert.Equal(3, strings.Count(rssHome, "<item>")) // rssLimit = 3
+	c.Assert(rssHome, qt.Contains, `<atom:link href="https://example.com/index.xml" rel="self" type="application/rss+xml" />`)
+	c.Assert(strings.Count(rssHome, "<item>"), qt.Equals, 3) // rssLimit = 3
 
 	// .Render should use template/content from the current output format
 	// even if that output format isn't configured for that page.
@@ -300,4 +300,34 @@ The content.
 	b.WithTemplatesAdded("_default/list.html", "HTML List: "+commonTemplate)
 
 	b.CreateSites().Build(BuildCfg{})
+}
+
+func TestBundleMany(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithSimpleConfigFile()
+	for i := 1; i <= 50; i++ {
+		b.WithContent(fmt.Sprintf("bundle%d/index.md", i), fmt.Sprintf(`
+---
+title: "Page %d"
+---
+		
+`, i))
+		b.WithSourceFile(fmt.Sprintf("content/bundle%d/data.yaml", i), fmt.Sprintf(`
+data: v%d		
+`, i))
+	}
+
+	b.WithTemplatesAdded("_default/single.html", `
+{{ $yaml := .Resources.GetMatch "*.yaml" }}
+{{ $data := $yaml | transform.Unmarshal }}
+data content: {{ $yaml.Content | safeHTML }}
+data unmarshaled: {{ $data.data }}
+`)
+
+	b.CreateSites().Build(BuildCfg{})
+
+	for i := 1; i <= 50; i++ {
+		b.AssertFileContent(fmt.Sprintf("public/bundle%d/data.yaml", i), fmt.Sprintf("data: v%d", i))
+		b.AssertFileContent(fmt.Sprintf("public/bundle%d/index.html", i), fmt.Sprintf("data unmarshaled: v%d", i))
+	}
 }

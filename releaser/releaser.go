@@ -94,6 +94,9 @@ func (r *ReleaseHandler) Run() error {
 
 	version := newVersion.String()
 	tag := "v" + version
+	isPatch := newVersion.PatchLevel > 0
+	mainVersion := newVersion
+	mainVersion.PatchLevel = 0
 
 	// Exit early if tag already exists
 	exists, err := tagExists(tag)
@@ -128,8 +131,8 @@ func (r *ReleaseHandler) Run() error {
 		return err
 	}
 
-	prepareRelaseNotes := relNotesState == releaseNotesNone
-	shouldRelease := relNotesState == releaseNotesReady
+	prepareRelaseNotes := isPatch || relNotesState == releaseNotesNone
+	shouldRelease := isPatch || relNotesState == releaseNotesReady
 
 	defer r.gitPush() // TODO(bep)
 
@@ -152,7 +155,7 @@ func (r *ReleaseHandler) Run() error {
 	}
 
 	if prepareRelaseNotes {
-		releaseNotesFile, err := r.writeReleaseNotesToTemp(version, gitCommits, gitCommitsDocs)
+		releaseNotesFile, err := r.writeReleaseNotesToTemp(version, isPatch, gitCommits, gitCommitsDocs)
 		if err != nil {
 			return err
 		}
@@ -160,7 +163,14 @@ func (r *ReleaseHandler) Run() error {
 		if _, err := r.git("add", releaseNotesFile); err != nil {
 			return err
 		}
-		if _, err := r.git("commit", "-m", fmt.Sprintf("%s Add release notes draft for %s\n\nRename to *-ready.md to continue. [ci skip]", commitPrefix, newVersion)); err != nil {
+
+		commitMsg := fmt.Sprintf("%s Add release notes for %s", commitPrefix, newVersion)
+		if !isPatch {
+			commitMsg += "\n\nRename to *-ready.md to continue."
+		}
+		commitMsg += "\n[ci skip]"
+
+		if _, err := r.git("commit", "-m", commitMsg); err != nil {
 			return err
 		}
 	}
@@ -185,8 +195,14 @@ func (r *ReleaseHandler) Run() error {
 
 	releaseNotesFile := getReleaseNotesDocsTempFilename(version, true)
 
+	title, description := version, version
+	if isPatch {
+		title = "Hugo " + version + ": A couple of Bug Fixes"
+		description = "This version fixes a couple of bugs introduced in " + mainVersion.String() + "."
+	}
+
 	// Write the release notes to the docs site as well.
-	docFile, err := r.writeReleaseNotesToDocs(version, releaseNotesFile)
+	docFile, err := r.writeReleaseNotesToDocs(title, description, releaseNotesFile)
 	if err != nil {
 		return err
 	}

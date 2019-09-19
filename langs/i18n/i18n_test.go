@@ -17,19 +17,21 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gohugoio/hugo/modules"
+
 	"github.com/gohugoio/hugo/tpl/tplimpl"
 
 	"github.com/gohugoio/hugo/common/loggers"
-	"github.com/gohugoio/hugo/htesting"
 	"github.com/gohugoio/hugo/langs"
+	"github.com/gohugoio/hugo/resources/page"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
 
 	"github.com/gohugoio/hugo/deps"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/hugofs"
-	"github.com/stretchr/testify/require"
 )
 
 var logger = loggers.NewErrorLogger()
@@ -177,19 +179,19 @@ func doTestI18nTranslate(t testing.TB, test i18nTest, cfg config.Provider) strin
 }
 
 func prepareTranslationProvider(t testing.TB, test i18nTest, cfg config.Provider) *TranslationProvider {
-	assert := require.New(t)
+	c := qt.New(t)
 	fs := hugofs.NewMem(cfg)
 
 	for file, content := range test.data {
 		err := afero.WriteFile(fs.Source, filepath.Join("i18n", file), []byte(content), 0755)
-		assert.NoError(err)
+		c.Assert(err, qt.IsNil)
 	}
 
 	tp := NewTranslationProvider()
 	depsCfg := newDepsConfig(tp, cfg, fs)
 	d, err := deps.New(depsCfg)
-	assert.NoError(err)
-	assert.NoError(d.LoadResources())
+	c.Assert(err, qt.IsNil)
+	c.Assert(d.LoadResources(), qt.IsNil)
 
 	return tp
 }
@@ -199,7 +201,7 @@ func newDepsConfig(tp *TranslationProvider, cfg config.Provider, fs *hugofs.Fs) 
 	l.Set("i18nDir", "i18n")
 	return deps.DepsCfg{
 		Language:            l,
-		Site:                htesting.NewTestHugoSite(),
+		Site:                page.NewDummyHugoSite(cfg),
 		Cfg:                 cfg,
 		Fs:                  fs,
 		Logger:              logger,
@@ -219,11 +221,19 @@ func getConfig() *viper.Viper {
 	v.Set("assetDir", "assets")
 	v.Set("resourceDir", "resources")
 	v.Set("publishDir", "public")
+	langs.LoadLanguageSettings(v, nil)
+	mod, err := modules.CreateProjectModule(v)
+	if err != nil {
+		panic(err)
+	}
+	v.Set("allModules", modules.Modules{mod})
+
 	return v
 
 }
 
 func TestI18nTranslate(t *testing.T) {
+	c := qt.New(t)
 	var actual, expected string
 	v := getConfig()
 
@@ -238,7 +248,7 @@ func TestI18nTranslate(t *testing.T) {
 				expected = test.expected
 			}
 			actual = doTestI18nTranslate(t, test, v)
-			require.Equal(t, expected, actual)
+			c.Assert(actual, qt.Equals, expected)
 		}
 	}
 }

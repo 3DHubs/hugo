@@ -22,7 +22,9 @@ import (
 	_errors "github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/resources"
 	"github.com/gohugoio/hugo/resources/resource"
+
 	"github.com/gohugoio/hugo/resources/resource_factories/bundler"
 	"github.com/gohugoio/hugo/resources/resource_factories/create"
 	"github.com/gohugoio/hugo/resources/resource_transformers/integrity"
@@ -68,7 +70,7 @@ type Namespace struct {
 	templatesClient *templates.Client
 }
 
-// Get locates the filename given in Hugo's filesystems: static, assets and content (in that order)
+// Get locates the filename given in Hugo's assets filesystem
 // and creates a Resource object that can be used for further transformations.
 func (ns *Namespace) Get(filename interface{}) (resource.Resource, error) {
 	filenamestr, err := cast.ToStringE(filename)
@@ -78,10 +80,48 @@ func (ns *Namespace) Get(filename interface{}) (resource.Resource, error) {
 
 	filenamestr = filepath.Clean(filenamestr)
 
-	// Resource Get'ing is currently limited to /assets to make it simpler
-	// to control the behaviour of publishing and partial rebuilding.
-	return ns.createClient.Get(ns.deps.BaseFs.Assets.Fs, filenamestr)
+	return ns.createClient.Get(filenamestr)
 
+}
+
+// GetMatch finds the first Resource matching the given pattern, or nil if none found.
+//
+// It looks for files in the assets file system.
+//
+// See Match for a more complete explanation about the rules used.
+func (ns *Namespace) GetMatch(pattern interface{}) (resource.Resource, error) {
+	patternStr, err := cast.ToStringE(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	return ns.createClient.GetMatch(patternStr)
+
+}
+
+// Match gets all resources matching the given base path prefix, e.g
+// "*.png" will match all png files. The "*" does not match path delimiters (/),
+// so if you organize your resources in sub-folders, you need to be explicit about it, e.g.:
+// "images/*.png". To match any PNG image anywhere in the bundle you can do "**.png", and
+// to match all PNG images below the images folder, use "images/**.jpg".
+//
+// The matching is case insensitive.
+//
+// Match matches by using the files name with path relative to the file system root
+// with Unix style slashes (/) and no leading slash, e.g. "images/logo.png".
+//
+// See https://github.com/gobwas/glob for the full rules set.
+//
+// It looks for files in the assets file system.
+//
+// See Match for a more complete explanation about the rules used.
+func (ns *Namespace) Match(pattern interface{}) (resource.Resources, error) {
+	patternStr, err := cast.ToStringE(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	return ns.createClient.Match(patternStr)
 }
 
 // Concat concatenates a slice of Resource objects. These resources must
@@ -136,7 +176,7 @@ func (ns *Namespace) ExecuteAsTemplate(args ...interface{}) (resource.Resource, 
 	}
 	data := args[1]
 
-	r, ok := args[2].(resource.Resource)
+	r, ok := args[2].(resources.ResourceTransformer)
 	if !ok {
 		return nil, fmt.Errorf("type %T not supported in Resource transformations", args[2])
 	}
@@ -163,9 +203,9 @@ func (ns *Namespace) Fingerprint(args ...interface{}) (resource.Resource, error)
 		}
 	}
 
-	r, ok := args[resIdx].(resource.Resource)
+	r, ok := args[resIdx].(resources.ResourceTransformer)
 	if !ok {
-		return nil, fmt.Errorf("%T is not a Resource", args[resIdx])
+		return nil, fmt.Errorf("%T can not be transformed", args[resIdx])
 	}
 
 	return ns.integrityClient.Fingerprint(r, algo)
@@ -173,7 +213,7 @@ func (ns *Namespace) Fingerprint(args ...interface{}) (resource.Resource, error)
 
 // Minify minifies the given Resource using the MediaType to pick the correct
 // minifier.
-func (ns *Namespace) Minify(r resource.Resource) (resource.Resource, error) {
+func (ns *Namespace) Minify(r resources.ResourceTransformer) (resource.Resource, error) {
 	return ns.minifyClient.Minify(r)
 }
 
@@ -181,7 +221,7 @@ func (ns *Namespace) Minify(r resource.Resource) (resource.Resource, error) {
 // object or a target path (string) as first argument.
 func (ns *Namespace) ToCSS(args ...interface{}) (resource.Resource, error) {
 	var (
-		r          resource.Resource
+		r          resources.ResourceTransformer
 		m          map[string]interface{}
 		targetPath string
 		err        error
@@ -228,7 +268,7 @@ func (ns *Namespace) PostCSS(args ...interface{}) (resource.Resource, error) {
 }
 
 // We allow string or a map as the first argument in some cases.
-func (ns *Namespace) resolveIfFirstArgIsString(args []interface{}) (resource.Resource, string, bool) {
+func (ns *Namespace) resolveIfFirstArgIsString(args []interface{}) (resources.ResourceTransformer, string, bool) {
 	if len(args) != 2 {
 		return nil, "", false
 	}
@@ -237,26 +277,26 @@ func (ns *Namespace) resolveIfFirstArgIsString(args []interface{}) (resource.Res
 	if !ok1 {
 		return nil, "", false
 	}
-	v2, ok2 := args[1].(resource.Resource)
+	v2, ok2 := args[1].(resources.ResourceTransformer)
 
 	return v2, v1, ok2
 }
 
 // This roundabout way of doing it is needed to get both pipeline behaviour and options as arguments.
-func (ns *Namespace) resolveArgs(args []interface{}) (resource.Resource, map[string]interface{}, error) {
+func (ns *Namespace) resolveArgs(args []interface{}) (resources.ResourceTransformer, map[string]interface{}, error) {
 	if len(args) == 0 {
 		return nil, nil, errors.New("no Resource provided in transformation")
 	}
 
 	if len(args) == 1 {
-		r, ok := args[0].(resource.Resource)
+		r, ok := args[0].(resources.ResourceTransformer)
 		if !ok {
 			return nil, nil, fmt.Errorf("type %T not supported in Resource transformations", args[0])
 		}
 		return r, nil, nil
 	}
 
-	r, ok := args[1].(resource.Resource)
+	r, ok := args[1].(resources.ResourceTransformer)
 	if !ok {
 		return nil, nil, fmt.Errorf("type %T not supported in Resource transformations", args[0])
 	}
