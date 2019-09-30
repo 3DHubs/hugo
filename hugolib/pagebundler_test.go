@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gohugoio/hugo/helpers"
+
 	"github.com/gohugoio/hugo/hugofs"
 
 	"github.com/gohugoio/hugo/common/loggers"
@@ -1215,4 +1217,78 @@ title: %q
         page|bundle sub p2|
 `)
 
+}
+
+func TestBundleTransformMany(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithSimpleConfigFile().Running()
+
+	for i := 1; i <= 50; i++ {
+		b.WithContent(fmt.Sprintf("bundle%d/index.md", i), fmt.Sprintf(`
+---
+title: "Page"
+weight: %d
+---
+		
+`, i))
+		b.WithSourceFile(fmt.Sprintf("content/bundle%d/data.yaml", i), fmt.Sprintf(`data: v%d`, i))
+		b.WithSourceFile(fmt.Sprintf("content/bundle%d/data.json", i), fmt.Sprintf(`{ "data": "v%d" }`, i))
+		b.WithSourceFile(fmt.Sprintf("assets/data%d/data.yaml", i), fmt.Sprintf(`vdata: v%d`, i))
+
+	}
+
+	b.WithTemplatesAdded("_default/single.html", `
+{{ $bundleYaml := .Resources.GetMatch "*.yaml" }}
+{{ $bundleJSON := .Resources.GetMatch "*.json" }}
+{{ $assetsYaml := resources.GetMatch (printf "data%d/*.yaml" .Weight) }}
+{{ $data1 := $bundleYaml | transform.Unmarshal }}
+{{ $data2 := $assetsYaml | transform.Unmarshal }}
+{{ $bundleFingerprinted := $bundleYaml | fingerprint "md5" }}
+{{ $assetsFingerprinted := $assetsYaml | fingerprint "md5" }}
+{{ $jsonMin := $bundleJSON | minify }}
+{{ $jsonMinMin := $jsonMin | minify }}
+{{ $jsonMinMinMin := $jsonMinMin | minify }}
+
+data content unmarshaled: {{ $data1.data }}
+data assets content unmarshaled: {{ $data2.vdata }}
+bundle fingerprinted: {{ $bundleFingerprinted.RelPermalink }}
+assets fingerprinted: {{ $assetsFingerprinted.RelPermalink }}
+
+bundle min min min: {{ $jsonMinMinMin.RelPermalink }}
+bundle min min key: {{ $jsonMinMin.Key }}
+
+`)
+
+	for i := 0; i < 3; i++ {
+
+		b.Build(BuildCfg{})
+
+		for i := 1; i <= 50; i++ {
+			index := fmt.Sprintf("public/bundle%d/index.html", i)
+			b.AssertFileContent(fmt.Sprintf("public/bundle%d/data.yaml", i), fmt.Sprintf("data: v%d", i))
+			b.AssertFileContent(index, fmt.Sprintf("data content unmarshaled: v%d", i))
+			b.AssertFileContent(index, fmt.Sprintf("data assets content unmarshaled: v%d", i))
+
+			md5Asset := helpers.MD5String(fmt.Sprintf(`vdata: v%d`, i))
+			b.AssertFileContent(index, fmt.Sprintf("assets fingerprinted: /data%d/data.%s.yaml", i, md5Asset))
+
+			// The original is not used, make sure it's not published.
+			b.Assert(b.CheckExists(fmt.Sprintf("public/data%d/data.yaml", i)), qt.Equals, false)
+
+			md5Bundle := helpers.MD5String(fmt.Sprintf(`data: v%d`, i))
+			b.AssertFileContent(index, fmt.Sprintf("bundle fingerprinted: /bundle%d/data.%s.yaml", i, md5Bundle))
+
+			b.AssertFileContent(index,
+				fmt.Sprintf("bundle min min min: /bundle%d/data.min.min.min.json", i),
+				fmt.Sprintf("bundle min min key: /bundle%d/data.min.min.json", i),
+			)
+			b.Assert(b.CheckExists(fmt.Sprintf("public/bundle%d/data.min.min.min.json", i)), qt.Equals, true)
+			b.Assert(b.CheckExists(fmt.Sprintf("public/bundle%d/data.min.json", i)), qt.Equals, false)
+			b.Assert(b.CheckExists(fmt.Sprintf("public/bundle%d/data.min.min.json", i)), qt.Equals, false)
+
+		}
+
+		b.EditFiles("assets/data/foo.yaml", "FOO")
+
+	}
 }
